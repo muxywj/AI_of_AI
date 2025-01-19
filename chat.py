@@ -32,7 +32,7 @@ class ChatBot:
 
 def main():
     # Groq API 키 설정
-    api_key = "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"  # 실제 API 키로 교체해주세요
+    api_key = ""  # 실제 API 키로 교체해주세요
     
     # 챗봇 인스턴스 생성
     chatbot = ChatBot(api_key)

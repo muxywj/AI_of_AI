@@ -106,6 +106,9 @@ class ChatBot:
             print(f"Error: {str(e)}")
             return f"오류가 발생했습니다: {str(e)}"
 
+OPENAI_API_KEY = ""
+ANTHROPIC_API_KEY = ""
+GROQ_API_KEY = ""
 
 
 
