@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Menu, Search, Clock, Settings } from 'lucide-react';
+import { Send, Menu, Search, Clock, Settings, X} from 'lucide-react';
 
 const ChatInterface = () => {
   const [messages, setMessages] = useState({
@@ -9,14 +9,16 @@ const ChatInterface = () => {
   });
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isSidebarVisible, setIsSidebarVisible] = useState(false);
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const messagesEndRef = useRef(null);
 
-//   const quickPrompts = [
-//     { title: "코드 작성 도움", desc: "웹사이트의 스타일리시한 헤더를 위한 코드" },
-//     { title: "이미지 생성", desc: "취침 시간 이야기와 그림 만들기" },
-//     { title: "텍스트 분석", desc: "이력서를 위한 강력한 문구 생성" },
-//     { title: "문제 해결", desc: "빠른 문제 해결 방법 제안" },
-//   ];
+  const quickPrompts = [
+    { title: "코드 작성 도움", desc: "웹사이트의 스타일리시한 헤더를 위한 코드" },
+    { title: "이미지 생성", desc: "취침 시간 이야기와 그림 만들기" },
+    { title: "텍스트 분석", desc: "이력서를 위한 강력한 문구 생성" },
+    { title: "문제 해결", desc: "빠른 문제 해결 방법 제안" },
+  ];
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -79,33 +81,36 @@ const ChatInterface = () => {
 
   return (
     <div className="flex flex-col h-screen bg-white">
+      
       {/* 상단 네비게이션 바 */}
       <nav className="bg-white border-b px-6 py-3 flex items-center justify-between">
         <div className="flex items-center space-x-4">
-          <Menu className="w-6 h-6 text-gray-600" />
+          <Menu className="w-6 h-6 text-gray-600 cursor-pointer" onClick={() => setIsSidebarVisible(!isSidebarVisible)} />
           <h1 className="text-xl font-semibold">AI Chatbot</h1>
         </div>
         <div className="flex items-center space-x-4">
           <Search className="w-5 h-5 text-gray-600" />
           <Clock className="w-5 h-5 text-gray-600" />
-          <Settings className="w-5 h-5 text-gray-600" />
+          <Settings className="w-5 h-5 text-gray-600 cursor-pointer" onClick={() => setIsLoginModalOpen(true)} />
         </div>
       </nav>
 
       {/* 메인 컨텐츠 영역 */}
-      <div className="flex-1 flex">
+      <div className="flex flex-1">
         {/* 왼쪽 사이드바 */}
-        {/* <div className="w-64 border-r bg-gray-50 p-4">
-          <h2 className="text-lg font-semibold mb-4">빠른 시작</h2>
-          <div className="space-y-3">
-            {quickPrompts.map((prompt, index) => (
-              <div key={index} className="p-3 bg-white rounded-lg shadow-sm hover:shadow cursor-pointer">
-                <h3 className="font-medium text-sm">{prompt.title}</h3>
-                <p className="text-xs text-gray-600 mt-1">{prompt.desc}</p>
-              </div>
-            ))}
+        {isSidebarVisible && (
+          <div className="w-64 border-r bg-gray-50 p-4">
+            <h2 className="text-lg font-semibold mb-4">메뉴</h2>
+            <div className="space-y-3">
+              {quickPrompts.map((prompt, index) => (
+                <div key={index} className="p-3 bg-white rounded-lg shadow-sm hover:shadow cursor-pointer">
+                  <h3 className="font-medium text-sm">{prompt.title}</h3>
+                  <p className="text-xs text-gray-600 mt-1">{prompt.desc}</p>
+                </div>
+              ))}
+            </div>
           </div>
-        </div> */}
+        )}
 
         {/* 채팅 영역 */}
         <div className="flex-1 grid grid-cols-3">
@@ -166,7 +171,30 @@ const ChatInterface = () => {
           </div>
         </form>
       </div>
-    </div>
+    
+
+     {/* 로그인 모달 */}
+     {isLoginModalOpen && (
+      <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50">
+        <div className="bg-white p-6 rounded-lg shadow-lg w-96 relative flex flex-col items-center">
+          <X className="absolute top-3 right-3 w-6 h-6 cursor-pointer" onClick={() => setIsLoginModalOpen(false)} />
+          <h2 className="text-2xl font-bold">AI OF AI</h2>
+          <p className="text-sm text-gray-600 mb-4">AI 통합 기반 답변 최적화 플랫폼</p>
+          <button className="w-full bg-gray-300 p-2 rounded mb-2">google로 로그인</button>
+          <button className="w-full bg-gray-300 p-2 rounded mb-2">kakao로 로그인</button>
+          <button className="w-full bg-gray-300 p-2 rounded mb-4">Naver로 로그인</button>
+          <hr className="w-full border-gray-400 mb-4" />
+          <input type="email" placeholder="이메일" className="w-full p-2 border rounded mb-2" />
+          <input type="password" placeholder="비밀번호" className="w-full p-2 border rounded mb-2" />
+          <div className="text-xs text-gray-600 flex justify-between w-full">
+            <span>비밀번호를 잊으셨나요?</span> <span className="text-blue-500 cursor-pointer">비밀번호 찾기</span>
+          </div>
+          <button className="w-full bg-gray-800 text-white p-2 rounded mt-4">로그인</button>
+        </div>
+      </div>
+    )}
+
+  </div>
   );
 };
 
