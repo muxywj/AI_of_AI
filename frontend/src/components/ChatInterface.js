@@ -1,9 +1,19 @@
 // src/components/ChatInterface.js 상단의 import 및 변수 선언 부분만 수정
 import React, { useState, useRef, useEffect } from 'react';
+<<<<<<< Updated upstream
+=======
+<<<<<<< HEAD
+import { Send, Menu, Search, Clock, Settings, X} from 'lucide-react';
+=======
+>>>>>>> Stashed changes
 import { Send, Menu, Search, Clock, Settings, X } from 'lucide-react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useGoogleLogin } from '@react-oauth/google';
 import { loginSuccess, loginFailure } from '../store/authSlice';
+<<<<<<< Updated upstream
+=======
+>>>>>>> 4a47049b6c71701a6a5c214835ba99eddadbc2ac
+>>>>>>> Stashed changes
 
 const ChatInterface = () => {
   const [messages, setMessages] = useState({
@@ -12,7 +22,15 @@ const ChatInterface = () => {
     mixtral: [],
   });
   const [inputMessage, setInputMessage] = useState('');
+<<<<<<< Updated upstream
   const [isLoading, setLoading] = useState(false);
+=======
+<<<<<<< HEAD
+  const [isLoading, setIsLoading] = useState(false);
+=======
+  const [isLoading, setLoading] = useState(false);
+>>>>>>> 4a47049b6c71701a6a5c214835ba99eddadbc2ac
+>>>>>>> Stashed changes
   const [isSidebarVisible, setIsSidebarVisible] = useState(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const messagesEndRef = useRef(null);
@@ -26,6 +44,48 @@ const ChatInterface = () => {
     { title: "텍스트 분석", desc: "이력서를 위한 강력한 문구 생성" },
     { title: "문제 해결", desc: "빠른 문제 해결 방법 제안" },
   ];
+<<<<<<< HEAD
+=======
+
+  const handleKakaoLogin = () => {
+    const kakaoAuthUrl = `https://kauth.kakao.com/oauth/authorize?response_type=code&client_id=${process.env.REACT_APP_KAKAO_CLIENT_ID}&redirect_uri=${process.env.REACT_APP_KAKAO_REDIRECT_URI}&scope=profile_nickname,account_email&prompt=login`;
+    window.location.href = kakaoAuthUrl;
+  };
+
+  const googleLogin = useGoogleLogin({
+    onSuccess: async (codeResponse) => {
+      setLoading(true);
+      try {
+        const backendResponse = await fetch('http://localhost:8000/api/auth/google/callback/', {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${codeResponse.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include',
+        });
+
+        if (!backendResponse.ok) {
+          const errorData = await backendResponse.json();
+          throw new Error(errorData.error || '로그인 실패');
+        }
+
+        const data = await backendResponse.json();
+        dispatch(loginSuccess(data.user));
+        setIsLoginModalOpen(false);  // 로그인 성공 시 모달 닫기
+      } catch (error) {
+        console.error('로그인 에러:', error);
+        dispatch(loginFailure(error.message));
+      } finally {
+        setLoading(false);
+      }
+    },
+    onError: (error) => {
+      console.error('로그인 실패:', error);
+      dispatch(loginFailure('구글 로그인 실패'));
+    },
+  });
+>>>>>>> 4a47049b6c71701a6a5c214835ba99eddadbc2ac
 
   const handleKakaoLogin = () => {
     const kakaoAuthUrl = `https://kauth.kakao.com/oauth/authorize?response_type=code&client_id=${process.env.REACT_APP_KAKAO_CLIENT_ID}&redirect_uri=${process.env.REACT_APP_KAKAO_REDIRECT_URI}&scope=profile_nickname,account_email&prompt=login`;
@@ -130,19 +190,39 @@ const ChatInterface = () => {
       {/* 상단 네비게이션 바 */}
       <nav className="bg-white border-b px-6 py-3 flex items-center justify-between">
         <div className="flex items-center space-x-4">
+<<<<<<< Updated upstream
+=======
+<<<<<<< HEAD
+          <Menu className="w-6 h-6 text-gray-600 cursor-pointer" onClick={() => setIsSidebarVisible(!isSidebarVisible)} />
+=======
+>>>>>>> Stashed changes
           <Menu 
             className="w-6 h-6 text-gray-600 cursor-pointer" 
             onClick={() => setIsSidebarVisible(!isSidebarVisible)} 
           />
+<<<<<<< Updated upstream
+=======
+>>>>>>> 4a47049b6c71701a6a5c214835ba99eddadbc2ac
+>>>>>>> Stashed changes
           <h1 className="text-xl font-semibold">AI Chatbot</h1>
         </div>
         <div className="flex items-center space-x-4">
           <Search className="w-5 h-5 text-gray-600" />
           <Clock className="w-5 h-5 text-gray-600" />
+<<<<<<< Updated upstream
+=======
+<<<<<<< HEAD
+          <Settings className="w-5 h-5 text-gray-600 cursor-pointer" onClick={() => setIsLoginModalOpen(true)} />
+=======
+>>>>>>> Stashed changes
           <Settings 
             className="w-5 h-5 text-gray-600 cursor-pointer" 
             onClick={() => setIsLoginModalOpen(true)} 
           />
+<<<<<<< Updated upstream
+=======
+>>>>>>> 4a47049b6c71701a6a5c214835ba99eddadbc2ac
+>>>>>>> Stashed changes
         </div>
       </nav>
 
@@ -162,6 +242,11 @@ const ChatInterface = () => {
             </div>
           </div>
         )}
+<<<<<<< Updated upstream
+=======
+<<<<<<< HEAD
+=======
+>>>>>>> Stashed changes
 {/* 로그인 모달 */}
 {isLoginModalOpen && (
   <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
@@ -258,6 +343,10 @@ const ChatInterface = () => {
             </div>
           </div>
         )} */}
+<<<<<<< Updated upstream
+=======
+>>>>>>> 4a47049b6c71701a6a5c214835ba99eddadbc2ac
+>>>>>>> Stashed changes
 
         {/* 채팅 영역 */}
         <div className="flex-1 grid grid-cols-3">
