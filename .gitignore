@@ -1,4 +1,12 @@
 venv/
 chatbot_backend/chat/__pycache__/
 chatbot_backend/chat/__pycache__/
+<<<<<<< Updated upstream
 .env
+=======
+<<<<<<< HEAD
+node_modules/
+=======
+.env
+>>>>>>> 4a47049b6c71701a6a5c214835ba99eddadbc2ac
+>>>>>>> Stashed changes
