@@ -100,7 +100,7 @@ const Settingbar = () => {
               계정이 없으신가요?{' '}
               <span className="text-blue-500 cursor-pointer" onClick={() => {
                 setIsSignupModalOpen(false);
-                setIsLoginModalOpen(true);
+                setIsLoginModalOpen(true); //나중에 회원가입 페이지로 이동하도록 수정해야함
               }}>
                 회원가입
               </span>
