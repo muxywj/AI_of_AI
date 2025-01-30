@@ -1,21 +1,23 @@
 // src/App.js
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import React from 'react';
+import { Provider } from 'react-redux';
 import { GoogleOAuthProvider } from '@react-oauth/google';
-import Login from './components/Login';
+import { BrowserRouter as Router } from 'react-router-dom';
 import ChatInterface from './components/ChatInterface';
+import { store } from './store';
 
-const App = () => {
+function App() {
   return (
-    <GoogleOAuthProvider clientId={process.env.REACT_APP_GOOGLE_CLIENT_ID}>
-      <Router>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/chat" element={<ChatInterface />} />
-          <Route path="/" element={<Navigate to="/login" replace />} />
-        </Routes>
-      </Router>
-    </GoogleOAuthProvider>
+    <Provider store={store}>
+      <GoogleOAuthProvider clientId={process.env.REACT_APP_GOOGLE_CLIENT_ID}>
+        <Router>
+          <div className="App">
+            <ChatInterface />
+          </div>
+        </Router>
+      </GoogleOAuthProvider>
+    </Provider>
   );
-};
+}
 
 export default App;
