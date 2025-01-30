@@ -1,5 +1,9 @@
+// src/components/ChatInterface.js 상단의 import 및 변수 선언 부분만 수정
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Menu, Search, Clock, Settings, X} from 'lucide-react';
+import { Send, Menu, Search, Clock, Settings, X } from 'lucide-react';
+import { useDispatch, useSelector } from 'react-redux';
+import { useGoogleLogin } from '@react-oauth/google';
+import { loginSuccess, loginFailure } from '../store/authSlice';
 
 const ChatInterface = () => {
   const [messages, setMessages] = useState({
@@ -8,10 +12,13 @@ const ChatInterface = () => {
     mixtral: [],
   });
   const [inputMessage, setInputMessage] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setLoading] = useState(false);
   const [isSidebarVisible, setIsSidebarVisible] = useState(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const messagesEndRef = useRef(null);
+  
+  const dispatch = useDispatch();
+  const { user } = useSelector((state) => state.auth);  // error 제거
 
   const quickPrompts = [
     { title: "코드 작성 도움", desc: "웹사이트의 스타일리시한 헤더를 위한 코드" },
@@ -19,6 +26,45 @@ const ChatInterface = () => {
     { title: "텍스트 분석", desc: "이력서를 위한 강력한 문구 생성" },
     { title: "문제 해결", desc: "빠른 문제 해결 방법 제안" },
   ];
+
+  const handleKakaoLogin = () => {
+    const kakaoAuthUrl = `https://kauth.kakao.com/oauth/authorize?response_type=code&client_id=${process.env.REACT_APP_KAKAO_CLIENT_ID}&redirect_uri=${process.env.REACT_APP_KAKAO_REDIRECT_URI}&scope=profile_nickname,account_email&prompt=login`;
+    window.location.href = kakaoAuthUrl;
+  };
+
+  const googleLogin = useGoogleLogin({
+    onSuccess: async (codeResponse) => {
+      setLoading(true);
+      try {
+        const backendResponse = await fetch('http://localhost:8000/api/auth/google/callback/', {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${codeResponse.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include',
+        });
+
+        if (!backendResponse.ok) {
+          const errorData = await backendResponse.json();
+          throw new Error(errorData.error || '로그인 실패');
+        }
+
+        const data = await backendResponse.json();
+        dispatch(loginSuccess(data.user));
+        setIsLoginModalOpen(false);  // 로그인 성공 시 모달 닫기
+      } catch (error) {
+        console.error('로그인 에러:', error);
+        dispatch(loginFailure(error.message));
+      } finally {
+        setLoading(false);
+      }
+    },
+    onError: (error) => {
+      console.error('로그인 실패:', error);
+      dispatch(loginFailure('구글 로그인 실패'));
+    },
+  });
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -36,7 +82,7 @@ const ChatInterface = () => {
     setInputMessage('');
 
     const updatedMessages = {};
-    setIsLoading(true);
+    setLoading(true);
 
     for (const botName of ['gpt', 'claude', 'mixtral']) {
       try {
@@ -76,22 +122,27 @@ const ChatInterface = () => {
       ...updatedMessages,
     }));
 
-    setIsLoading(false);
+    setLoading(false);
   };
 
   return (
     <div className="flex flex-col h-screen bg-white">
-      
       {/* 상단 네비게이션 바 */}
       <nav className="bg-white border-b px-6 py-3 flex items-center justify-between">
         <div className="flex items-center space-x-4">
-          <Menu className="w-6 h-6 text-gray-600 cursor-pointer" onClick={() => setIsSidebarVisible(!isSidebarVisible)} />
+          <Menu 
+            className="w-6 h-6 text-gray-600 cursor-pointer" 
+            onClick={() => setIsSidebarVisible(!isSidebarVisible)} 
+          />
           <h1 className="text-xl font-semibold">AI Chatbot</h1>
         </div>
         <div className="flex items-center space-x-4">
           <Search className="w-5 h-5 text-gray-600" />
           <Clock className="w-5 h-5 text-gray-600" />
-          <Settings className="w-5 h-5 text-gray-600 cursor-pointer" onClick={() => setIsLoginModalOpen(true)} />
+          <Settings 
+            className="w-5 h-5 text-gray-600 cursor-pointer" 
+            onClick={() => setIsLoginModalOpen(true)} 
+          />
         </div>
       </nav>
 
@@ -111,6 +162,102 @@ const ChatInterface = () => {
             </div>
           </div>
         )}
+{/* 로그인 모달 */}
+{isLoginModalOpen && (
+  <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
+    <div className="bg-white p-6 rounded-lg shadow-lg w-96 relative flex flex-col items-center">
+      <X className="absolute top-3 right-3 w-6 h-6 cursor-pointer" onClick={() => setIsLoginModalOpen(false)} />
+      <h2 className="text-2xl font-bold">AI OF AI</h2>
+      <p className="text-sm text-gray-600 mb-4">AI 통합 기반 답변 최적화 플랫폼</p>
+
+      {user ? (
+        // 로그인된 상태
+        <div className="w-full space-y-4">
+          <div className="bg-green-100 border border-green-400 text-green-700 p-4 rounded">
+            <p>환영합니다, {user.nickname || user.username}님!</p>
+            <p>이메일: {user.email}</p>
+          </div>
+          <button
+            onClick={() => setIsLoginModalOpen(false)}
+            className="w-full bg-indigo-600 text-white p-2 rounded hover:bg-indigo-700"
+          >
+            계속하기
+          </button>
+      
+   
+        </div>
+      ) : (
+        // 로그인되지 않은 상태
+        <>
+          <button onClick={googleLogin} disabled={isLoading} className="w-full bg-gray-300 p-2 rounded mb-2">
+            {isLoading ? "로그인 중..." : "Google로 로그인"}
+          </button>
+          <button onClick={handleKakaoLogin} disabled={isLoading} className="w-full bg-gray-300 p-2 rounded mb-2">
+            Kakao로 로그인
+          </button>
+          <button className="w-full bg-gray-300 p-2 rounded mb-4">Naver로 로그인</button>
+          <hr className="w-full border-gray-400 mb-4" />
+          <input type="email" placeholder="이메일" className="w-full p-2 border rounded mb-2" />
+          <input type="password" placeholder="비밀번호" className="w-full p-2 border rounded mb-2" />
+          <div className="text-xs text-gray-600 flex justify-between w-full">
+            <span>비밀번호를 잊으셨나요?</span> <span className="text-blue-500 cursor-pointer">비밀번호 찾기</span>
+          </div>
+          <button className="w-full bg-gray-800 text-white p-2 rounded mt-4">로그인</button>
+        </>
+      )}
+    </div>
+  </div>
+)}
+
+        {/* 로그인 모달
+        {isLoginModalOpen && (
+           <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
+           <div className="bg-white p-6 rounded-lg shadow-lg w-96 relative flex flex-col items-center">
+             <X className="absolute top-3 right-3 w-6 h-6 cursor-pointer" onClick={() => setIsLoginModalOpen(false)} />
+             <h2 className="text-2xl font-bold">AI OF AI</h2>
+             <p className="text-sm text-gray-600 mb-4">AI 통합 기반 답변 최적화 플랫폼</p>
+       
+              
+              {user ? (
+                <div className="w-full space-y-4">
+                  <div className="bg-green-100 border border-green-400 text-green-700 p-4 rounded">
+                    <p>환영합니다, {user.nickname || user.username}님!</p>
+                    <p>이메일: {user.email}</p>
+                  </div>
+                  <button
+                    onClick={() => setIsLoginModalOpen(false)}
+                    className="w-full bg-indigo-600 text-white p-2 rounded hover:bg-indigo-700"
+                  >
+                    계속하기
+                  </button>
+                </div>
+              ) : (
+                <div className="w-full space-y-4">
+                  <button onClick={googleLogin} disabled={isLoading} className="w-full bg-gray-300 p-2 rounded mb-2">
+        {isLoading ? "로그인 중..." : "Google로 로그인"}
+      </button>
+      <button onClick={handleKakaoLogin} disabled={isLoading} className="w-full bg-gray-300 p-2 rounded mb-2">
+        Kakao로 로그인
+      </button>
+      <button className="w-full bg-gray-300 p-2 rounded mb-4">Naver로 로그인</button>
+
+      <hr className="w-full border-gray-400 mb-4" />
+                  
+      <input type="email" placeholder="이메일" className="w-full p-2 border rounded mb-2" />
+      <input type="password" placeholder="비밀번호" className="w-full p-2 border rounded mb-2" />
+      <div className="text-xs text-gray-600 flex justify-between w-full">
+        <span>비밀번호를 잊으셨나요?</span>
+        <span className="text-blue-500 cursor-pointer">비밀번호 찾기</span>
+      </div>
+                    <button className="w-full bg-gray-800 text-white p-2 rounded">
+                      로그인
+                    </button>
+                
+                </div>
+              )}
+            </div>
+          </div>
+        )} */}
 
         {/* 채팅 영역 */}
         <div className="flex-1 grid grid-cols-3">
@@ -171,30 +318,7 @@ const ChatInterface = () => {
           </div>
         </form>
       </div>
-    
-
-     {/* 로그인 모달 */}
-     {isLoginModalOpen && (
-      <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50">
-        <div className="bg-white p-6 rounded-lg shadow-lg w-96 relative flex flex-col items-center">
-          <X className="absolute top-3 right-3 w-6 h-6 cursor-pointer" onClick={() => setIsLoginModalOpen(false)} />
-          <h2 className="text-2xl font-bold">AI OF AI</h2>
-          <p className="text-sm text-gray-600 mb-4">AI 통합 기반 답변 최적화 플랫폼</p>
-          <button className="w-full bg-gray-300 p-2 rounded mb-2">google로 로그인</button>
-          <button className="w-full bg-gray-300 p-2 rounded mb-2">kakao로 로그인</button>
-          <button className="w-full bg-gray-300 p-2 rounded mb-4">Naver로 로그인</button>
-          <hr className="w-full border-gray-400 mb-4" />
-          <input type="email" placeholder="이메일" className="w-full p-2 border rounded mb-2" />
-          <input type="password" placeholder="비밀번호" className="w-full p-2 border rounded mb-2" />
-          <div className="text-xs text-gray-600 flex justify-between w-full">
-            <span>비밀번호를 잊으셨나요?</span> <span className="text-blue-500 cursor-pointer">비밀번호 찾기</span>
-          </div>
-          <button className="w-full bg-gray-800 text-white p-2 rounded mt-4">로그인</button>
-        </div>
-      </div>
-    )}
-
-  </div>
+    </div>
   );
 };
 
