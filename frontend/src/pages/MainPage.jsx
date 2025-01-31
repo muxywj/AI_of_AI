@@ -30,7 +30,7 @@ const MainPage = () => {
       </nav>
 
       {/* 메인 컨텐츠 영역 */}
-      <div className="flex flex-1 min-h-0"> 
+      <div className="flex flex-1 min-h-0 overflow-hidden"> 
         {isSidebarVisible && <Sidebar />}
         <ChatBox />
       </div>
