@@ -30,21 +30,21 @@ const ChatBox = () => {
       {/* AI 이름 박스 - 상단 고정 */}
       <div className="grid grid-cols-3 border-b bg-white sticky top-0 z-20">
         {["gpt", "claude", "mixtral"].map((botName) => (
-          <div key={botName} className="p-4 text-xl font-semibold text-center border-r last:border-r-0">
+          <div key={botName} className="p-4 text-xl font-semibold text-center border-r last:border-r-0" style={{width: '100%'}}>
             {botName.toUpperCase()}
           </div>
         ))}
       </div>
 
-      {/* 채팅 메시지 영역을 AI 이름 박스 아래에 위치하도록 조정 */}
-      <div className="flex-1 grid grid-cols-3 overflow-y-auto p-6 pt-12 space-y-6"> {/* 패딩 추가하여 시작 지점 조정 */}
+      {/* 채팅 메시지 영역 */}
+      <div className="flex-1 grid grid-cols-3 min-h-0 mt-14">
         {["gpt", "claude", "mixtral"].map((botName) => (
-          <div key={botName} className="flex flex-col border-r last:border-r-0 h-full overflow-hidden"> {/* GPT 칸 높이 문제 해결 */}
-            <div className="flex-1 overflow-y-auto p-4">
+          <div key={botName} className="border-r last:border-r-0 overflow-hidden" style={{width: '100%'}}>
+            <div className="h-full overflow-y-auto px-4">
               {messages[botName].map((message, index) => (
-                <div key={index} className={`flex ${message.isUser ? "justify-end" : "justify-start"}`}>
+                <div key={index} className={`flex ${message.isUser ? "justify-end" : "justify-start"} mb-4`}>
                   <div
-                    className={`max-w-2xl p-4 rounded-2xl ${
+                    className={`max-w-[85%] p-4 rounded-2xl ${
                       message.isUser ? "bg-purple-600 text-white" : "bg-gray-100 text-gray-800"
                     }`}
                   >
@@ -53,7 +53,7 @@ const ChatBox = () => {
                 </div>
               ))}
               {isLoading && (
-                <div className="flex justify-start">
+                <div className="flex justify-start mb-4">
                   <div className="bg-gray-100 text-gray-800 p-4 rounded-2xl">입력 중...</div>
                 </div>
               )}
