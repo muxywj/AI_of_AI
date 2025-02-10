@@ -28,7 +28,7 @@ const ChatBox = () => {
   return (
     <div className="flex flex-col h-screen w-full bg-white">
       {/* AI 이름 박스 - 상단 고정 */}
-      <div className="grid grid-cols-3 border-b bg-white sticky top-0 z-20">
+      <div className="grid grid-cols-3 border-b bg-white sticky top-0 z-10">
         {["gpt", "claude", "mixtral"].map((botName) => (
           <div key={botName} className="p-4 text-xl font-semibold text-center border-r last:border-r-0" style={{width: '100%'}}>
             {botName.toUpperCase()}
@@ -64,7 +64,7 @@ const ChatBox = () => {
       </div>
 
       {/* 입력창을 화면 하단에 고정 */}
-      <div className="border-t p-4 w-full flex-shrink-0 bg-white sticky bottom-0 z-20">
+      <div className="border-t p-4 w-full flex-shrink-0 bg-white sticky bottom-0 z-10">
         <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto flex items-center bg-white border rounded-xl p-2">
           <input
             type="text"
