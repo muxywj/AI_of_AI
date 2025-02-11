@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-
+import { X } from "lucide-react";
 const Settingbar = ({ isOpen, onClose }) => {
   const [isAISelectionOpen, setIsAISelectionOpen] = useState(false);
   const [isLanguageSelectionOpen, setIsLanguageSelectionOpen] = useState(false);
@@ -13,9 +13,13 @@ const Settingbar = ({ isOpen, onClose }) => {
       {/* 메인 설정 모달 */}
       {isOpen && !isAISelectionOpen && !isLanguageSelectionOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md shadow-lg">
+          <div className="bg-white rounded-lg p-6 w-96 shadow-lg relative flex flex-col items-center">
+            <X
+              className="absolute top-3 right-3 w-6 h-6 cursor-pointer"
+              onClick={onClose}
+            />
             <h2 className="text-xl font-bold mb-4">설정</h2>
-            <div className="space-y-4">
+            <div className="space-y-4 w-full">
               <button
                 className="w-full p-4 border rounded-lg hover:bg-blue-50 transition-colors font-bold"
                 onClick={() => setIsLanguageSelectionOpen(true)}
@@ -27,11 +31,6 @@ const Settingbar = ({ isOpen, onClose }) => {
                 onClick={() => setIsAISelectionOpen(true)}
               >
                 최적화 모델 선택
-              </button>
-            </div>
-            <div className="flex justify-end mt-4">
-              <button onClick={onClose} className="text-gray-600 hover:text-black">
-                닫기
               </button>
             </div>
           </div>
@@ -86,11 +85,6 @@ const Settingbar = ({ isOpen, onClose }) => {
                 </ul>
               </button>
             </div>
-            <div className="flex justify-end">
-              <button onClick={() => setIsAISelectionOpen(false)} className="text-gray-600 hover:text-black">
-                닫기
-              </button>
-            </div>
           </div>
         </div>
       )}
@@ -110,11 +104,6 @@ const Settingbar = ({ isOpen, onClose }) => {
                   {lang}
                 </button>
               ))}
-            </div>
-            <div className="flex justify-end">
-              <button onClick={() => setIsLanguageSelectionOpen(false)} className="text-gray-600 hover:text-black">
-                닫기
-              </button>
             </div>
           </div>
         </div>
