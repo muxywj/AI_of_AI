@@ -1,15 +1,21 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Send } from "lucide-react";
-import { useChat } from "../context/ChatContext"; 
+import { Send, CirclePlus } from "lucide-react";
+import { useChat } from "../context/ChatContext";
+import ModelSelectionModal from "./ModelSelectionModal";
 
 const ChatBox = () => {
-  const { messages, sendMessage, isLoading } = useChat(); 
+  const { messages, sendMessage, isLoading, selectedModels, setSelectedModels } = useChat();
   const [inputMessage, setInputMessage] = useState("");
-  const messagesEndRefs = {
-    gpt: useRef(null),
-    claude: useRef(null),
-    mixtral: useRef(null)
-  };
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const messagesEndRefs = useRef({});
+
+  useEffect(() => {
+    selectedModels.concat("optimal").forEach((modelId) => {
+      if (!messagesEndRefs.current[modelId]) {
+        messagesEndRefs.current[modelId] = React.createRef();
+      }
+    });
+  }, [selectedModels]);
 
   // 메시지 전송
   const handleSendMessage = (e) => {
@@ -20,34 +26,30 @@ const ChatBox = () => {
 
   // 새 메시지가 추가될 때마다 스크롤을 맨 아래로 이동
   useEffect(() => {
-    Object.values(messagesEndRefs).forEach(ref => {
-      ref.current?.scrollIntoView({ behavior: "smooth" });
+    selectedModels.concat("optimal").forEach((modelId) => {
+      messagesEndRefs.current[modelId]?.current?.scrollIntoView({ behavior: "smooth" });
     });
-  }, [messages]);
+  }, [messages, selectedModels]);
 
   return (
-    <div className="flex flex-col h-screen w-full bg-white">
+    <div className="h-screen w-full bg-white flex flex-col">
       {/* AI 이름 박스 - 상단 고정 */}
-      <div className="grid grid-cols-3 border-b bg-white sticky top-0 z-10">
-        {["gpt", "claude", "mixtral"].map((botName) => (
-          <div key={botName} className="p-4 text-xl font-semibold text-center border-r last:border-r-0" style={{width: '100%'}}>
-            {botName.toUpperCase()}
+      <div className="flex-shrink-0 flex bg-white border-b w-full sticky top-0 z-10">
+        {selectedModels.concat("optimal").map((modelId) => (
+          <div key={modelId} className="p-4 text-xl font-semibold text-center border-r flex-1 whitespace-nowrap overflow-hidden text-ellipsis">
+            {modelId === "optimal" ? "최적의 답변" : modelId.toUpperCase()}
           </div>
         ))}
       </div>
 
-      {/* 채팅 메시지 영역 */}
-      <div className="flex-1 grid grid-cols-3 min-h-0 mt-14">
-        {["gpt", "claude", "mixtral"].map((botName) => (
-          <div key={botName} className="border-r last:border-r-0 overflow-hidden" style={{width: '100%'}}>
-            <div className="h-full overflow-y-auto px-4">
-              {messages[botName].map((message, index) => (
+      {/* 채팅 메시지 영역 (유동적 크기 적용) */}
+      <div className="flex-1 grid overflow-hidden" style={{ gridTemplateColumns: `repeat(${selectedModels.length + 1}, minmax(0, 1fr))` }}>
+        {selectedModels.concat("optimal").map((modelId) => (
+          <div key={modelId} className="border-r flex-1 overflow-y-auto">
+            <div className="min-h-full px-4 pb-20 pt-[4rem]">
+              {messages[modelId]?.map((message, index) => (
                 <div key={index} className={`flex ${message.isUser ? "justify-end" : "justify-start"} mb-4`}>
-                  <div
-                    className={`max-w-[85%] p-4 rounded-2xl ${
-                      message.isUser ? "bg-purple-600 text-white" : "bg-gray-100 text-gray-800"
-                    }`}
-                  >
+                  <div className={`max-w-[85%] p-4 rounded-2xl ${message.isUser ? "bg-purple-600 text-white" : "bg-gray-100 text-gray-800"}`}>
                     {message.text}
                   </div>
                 </div>
@@ -57,7 +59,7 @@ const ChatBox = () => {
                   <div className="bg-gray-100 text-gray-800 p-4 rounded-2xl">입력 중...</div>
                 </div>
               )}
-              <div ref={messagesEndRefs[botName]} />
+              <div ref={messagesEndRefs.current[modelId]} />
             </div>
           </div>
         ))}

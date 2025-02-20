@@ -9,8 +9,10 @@ export const ChatProvider = ({ children }) => {
     gpt: [],
     claude: [],
     mixtral: [],
+    optimal: []
   });
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedModels, setSelectedModels] = useState(["gpt", "claude", "mixtral"]);
   const messagesEndRef = useRef(null);
 
   // 스크롤을 자동으로 최신 메시지로 이동
@@ -31,11 +33,17 @@ export const ChatProvider = ({ children }) => {
     if (!userMessage.trim()) return;
 
     setIsLoading(true);
-    const updatedMessages = {};
 
-    for (const botName of ["gpt", "claude", "mixtral"]) {
+    // 선택된 모델들에 대해서만 메시지 처리
+    for (const modelId of selectedModels) {
+      // 사용자 메시지 추가
+      setMessages(prev => ({
+        ...prev,
+        [modelId]: [...(prev[modelId] || []), { text: userMessage, isUser: true }]
+      }));
+
       try {
-        const response = await fetch(`http://localhost:8000/chat/${botName}/`, {
+        const response = await fetch(`http://localhost:8000/chat/${modelId}/`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -48,35 +56,44 @@ export const ChatProvider = ({ children }) => {
         }
 
         const data = await response.json();
-        updatedMessages[botName] = [
-          ...(messages[botName] || []),
-          { text: userMessage, isUser: true },
-          { text: data.response, isUser: false },
-        ];
+        
+        // AI 응답 추가
+        setMessages(prev => ({
+          ...prev,
+          [modelId]: [...prev[modelId], { text: data.response, isUser: false }]
+        }));
+
       } catch (error) {
         console.error("Error:", error);
-        updatedMessages[botName] = [
-          ...(messages[botName] || []),
-          { text: userMessage, isUser: true },
-          { text: `오류가 발생했습니다: ${error.message}`, isUser: false },
-        ];
+        // 에러 메시지 추가
+        setMessages(prev => ({
+          ...prev,
+          [modelId]: [...prev[modelId], { text: "죄송합니다. 오류가 발생했습니다.", isUser: false }]
+        }));
       }
     }
-
-    setMessages((prev) => ({
-      ...prev,
-      ...updatedMessages,
-    }));
 
     setIsLoading(false);
   };
 
   return (
-    <ChatContext.Provider value={{ messages, addMessage, sendMessage, isLoading, messagesEndRef }}>
+    <ChatContext.Provider value={{ 
+      messages, 
+      sendMessage, 
+      isLoading,
+      selectedModels,
+      setSelectedModels
+    }}>
       {children}
     </ChatContext.Provider>
   );
 };
 
 // ChatContext 사용을 위한 커스텀 훅
-export const useChat = () => useContext(ChatContext);
+export const useChat = () => {
+  const context = useContext(ChatContext);
+  if (!context) {
+    throw new Error("useChat must be used within a ChatProvider");
+  }
+  return context;
+};
