@@ -18,13 +18,21 @@ const Settingbar = ({ isOpen, onClose }) => {
     "ไทย", "한국어", "中文 (简体)", "中文 (繁體)", "日本語"
   ];
 
-const handleConfirm = () => {
-  setIsAISelectionOpen(false);
-  setIsLanguageSelectionOpen(false);
-  setSelectedAI(null);
-  setSelectedLanguage(null);
-  onClose();
-};
+  const handleConfirm = () => {
+    setIsAISelectionOpen(false);
+    setIsLanguageSelectionOpen(false);
+    setSelectedAI(null);
+    setSelectedLanguage(null);
+    onClose();
+  };
+
+  const handleClose = () => {
+    setIsAISelectionOpen(false);
+    setIsLanguageSelectionOpen(false);
+    setSelectedAI(null);
+    setSelectedLanguage(null);
+    onClose();
+  };
 
   return (
     <>
@@ -56,6 +64,7 @@ const handleConfirm = () => {
       {isAISelectionOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-2xl shadow-lg relative pb-20">
+            <X className="absolute top-3 right-3 w-6 h-6 cursor-pointer" onClick={handleClose} />
             <h2 className="text-xl font-bold mb-4">최적화 모델 선택</h2>
             <div className="grid grid-cols-3 gap-4 mb-6">
               {["GPT-3.5", "Claude", "Mixtral"].map((model) => (
@@ -96,32 +105,34 @@ const handleConfirm = () => {
           </div>
         </div>
       )}
+
       {/* 언어 선택 모달 */}
-    {isLanguageSelectionOpen && (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div className="bg-white rounded-lg p-6 w-full max-w-md shadow-lg relative h-96 overflow-y-auto flex flex-col" onScroll={(e) => setShowConfirmButton(e.target.scrollTop + e.target.clientHeight >= e.target.scrollHeight)}>
-          <h2 className="text-xl font-bold mb-4">언어 선택</h2>
-          <div className="grid grid-cols-2 gap-2 mb-6">
-            {languages.map((lang) => (
-              <button
-                key={lang}
-                onClick={() => setSelectedLanguage(lang)}
-                className={`p-2 border rounded-lg transition-colors ${selectedLanguage === lang ? "bg-blue-300" : "hover:bg-blue-50"}`}
-              >
-                {lang}
-              </button>
-            ))}
+      {isLanguageSelectionOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md shadow-lg relative h-96 overflow-y-auto flex flex-col" onScroll={(e) => setShowConfirmButton(e.target.scrollTop + e.target.clientHeight >= e.target.scrollHeight)}>
+            <X className="absolute top-3 right-3 w-6 h-6 cursor-pointer" onClick={handleClose} />
+            <h2 className="text-xl font-bold mb-4">언어 선택</h2>
+            <div className="grid grid-cols-2 gap-2 mb-6">
+              {languages.map((lang) => (
+                <button
+                  key={lang}
+                  onClick={() => setSelectedLanguage(lang)}
+                  className={`p-2 border rounded-lg transition-colors ${selectedLanguage === lang ? "bg-blue-300" : "hover:bg-blue-50"}`}
+                >
+                  {lang}
+                </button>
+              ))}
+            </div>
+            <button 
+              className={`px-6 py-3 rounded-lg transition-colors self-end mt-auto shadow-md ${selectedLanguage ? "bg-blue-500 text-white hover:bg-blue-600" : "bg-gray-300 text-gray-500 cursor-not-allowed"}`} 
+              onClick={handleConfirm}
+              disabled={!selectedLanguage}
+            >
+              확인
+            </button>
           </div>
-          <button 
-            className={`px-6 py-3 rounded-lg transition-colors self-end mt-auto  shadow-md ${selectedLanguage ? "bg-blue-500 text-white hover:bg-blue-600" : "bg-gray-300 text-gray-500 cursor-not-allowed"}`} 
-            onClick={handleConfirm}
-            disabled={!selectedLanguage}
-          >
-            확인
-          </button>
         </div>
-      </div>
-    )}
+      )}
     </>
   );
 };

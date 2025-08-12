@@ -40,7 +40,9 @@ const MainPage = () => {
 
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {isSidebarVisible && <Sidebar />}
-        <ChatBox selectedModels={selectedModels} />
+        <div className="flex-1 overflow-hidden">
+          <ChatBox selectedModels={selectedModels} />
+        </div>
       </div>
 
       <ModelSelectionModal 

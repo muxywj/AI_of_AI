@@ -9,7 +9,7 @@ const Sidebar = () => {
   ];
 
   return (
-    <div className="w-64 border-r bg-gray-50 p-4 absolute left-0 top-16 h-full shadow-lg">
+    <div className="w-64 border-r bg-gray-50 p-4 h-full flex-shrink-0">
       <h2 className="text-lg font-semibold mb-4">메뉴</h2>
       <div className="space-y-3">
         {quickPrompts.map((prompt, index) => (

@@ -1,22 +1,12 @@
-// src/App.js
 import React from 'react';
-import { Provider } from 'react-redux';
-import { GoogleOAuthProvider } from '@react-oauth/google';
-import { BrowserRouter as Router } from 'react-router-dom';
-import ChatInterface from './components/ChatInterface';
-import { store } from './store';
+import MainPage from './pages/MainPage';
+import { ChatProvider } from './context/ChatContext'; // ← 이 경로가 맞다면 그대로 사용
 
 function App() {
   return (
-    <Provider store={store}>
-      <GoogleOAuthProvider clientId={process.env.REACT_APP_GOOGLE_CLIENT_ID}>
-        <Router>
-          <div className="App">
-            <ChatInterface />
-          </div>
-        </Router>
-      </GoogleOAuthProvider>
-    </Provider>
+    <ChatProvider>
+      <MainPage />
+    </ChatProvider>
   );
 }
 
