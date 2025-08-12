@@ -1,84 +1,30 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { X } from 'lucide-react';
 
 const Loginbar = ({ onClose }) => {
-  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
-  const [isSignupModalOpen, setIsSignupModalOpen] = useState(false);
-
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-40">
-      <div className="bg-white p-6 rounded-lg shadow-lg w-96 relative flex flex-col items-center">
+      <div className="bg-white p-6 rounded-lg shadow-lg w-96 relative">
         <X
           className="absolute top-3 right-3 w-6 h-6 cursor-pointer"
-          onClick={onClose} // `onClose` 사용하여 Settingbar 닫기
+          onClick={onClose}
         />
-        <h2 className="text-2xl font-bold">AI OF AI</h2>
-        <p className="text-sm text-gray-600 mb-4">
-          AI 통합 기반 답변 최적화 플랫폼
-        </p>
+        <h3 className="text-xl font-bold mb-2 text-left">로그인</h3>
+        <p className="text-sm text-gray-600 mb-4 text-left">소셜 계정으로 간편하게 로그인하세요.</p>
+        <hr className="w-full border-gray-300 mb-4" />
 
-        {/* 로그인 & 회원가입 버튼 */}
-        {!isLoginModalOpen && !isSignupModalOpen && (
-          <div className="w-full flex flex-col items-center space-y-2">
-            <button 
-              className="w-full p-2 border rounded-lg bg-white hover:bg-blue-50 transition-colors" 
-              onClick={() => setIsLoginModalOpen(true)}
-            >
-              로그인
-            </button>
-            <button 
-              className="w-full p-2 border rounded-lg bg-white hover:bg-blue-50 transition-colors" 
-              onClick={() => setIsSignupModalOpen(true)}
-            >
-              회원가입
-            </button>
-          </div>
-        )}
-
-        {/* 로그인 모달 */}
-        {isLoginModalOpen && (
-          <div className="w-full flex flex-col items-center space-y-2">
-            <button className="w-full p-2 border rounded-lg bg-white hover:bg-blue-50 transition-colors">Google로 로그인</button>
-            <button className="w-full p-2 border rounded-lg bg-white hover:bg-blue-50 transition-colors">Kakao로 로그인</button>
-            <button className="w-full p-2 border rounded-lg bg-white hover:bg-blue-50 transition-colors">Naver로 로그인</button>
-            
-            <hr className="w-full border-gray-400 mb-4" />
-            <input type="email" placeholder="이메일" className="w-full p-2 border rounded mb-2" />
-            <input type="password" placeholder="비밀번호" className="w-full p-2 border rounded mb-2" />
-            <div className="text-xs text-gray-600 flex justify-between w-full">
-              <span>비밀번호를 잊으셨나요?</span>{' '}
-              <span className="text-blue-500 cursor-pointer">비밀번호 찾기</span>
-            </div>
-            <button className="w-full bg-gray-800 text-white p-2 rounded mt-4">로그인</button>
-            <div className="text-xs text-gray-600 mt-2">
-              계정이 없으신가요?{' '}
-              <span className="text-blue-500 cursor-pointer" onClick={() => {
-                setIsLoginModalOpen(false);
-                setIsSignupModalOpen(true);
-              }}>
-                회원가입
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* 회원가입 모달 */}
-        {isSignupModalOpen && (
-          <div className="w-full flex flex-col items-center space-y-2">
-            <button className="w-full p-2 border rounded-lg bg-white hover:bg-blue-50 transition-colors">Google로 회원가입</button>
-            <button className="w-full p-2 border rounded-lg bg-white hover:bg-blue-50 transition-colors">Kakao로 회원가입</button>
-            <button className="w-full p-2 border rounded-lg bg-white hover:bg-blue-50 transition-colors">Naver로 회원가입</button>
-            <div className="text-xs text-gray-600 mt-2">
-              이미 계정이 있으신가요?{' '}
-              <span className="text-blue-500 cursor-pointer" onClick={() => {
-                setIsSignupModalOpen(false);
-                setIsLoginModalOpen(true);
-              }}>
-                로그인
-              </span>
-            </div>
-          </div>
-        )}
+        {/* 소셜 로그인 버튼들 */}
+        <div className="w-full flex flex-col space-y-3">
+          <button className="w-full p-3 border rounded-lg bg-white hover:bg-blue-50 transition-colors font-medium">
+            Google로 로그인
+          </button>
+          <button className="w-full p-3 border rounded-lg bg-white hover:bg-yellow-50 transition-colors font-medium">
+            Kakao로 로그인
+          </button>
+          <button className="w-full p-3 border rounded-lg bg-white hover:bg-green-50 transition-colors font-medium">
+            Naver로 로그인
+          </button>
+        </div>
       </div>
     </div>
   );

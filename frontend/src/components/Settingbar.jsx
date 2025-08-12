@@ -39,9 +39,11 @@ const Settingbar = ({ isOpen, onClose }) => {
       {/* 메인 설정 모달 */}
       {isOpen && !isAISelectionOpen && !isLanguageSelectionOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-96 shadow-lg relative flex flex-col items-center">
+          <div className="bg-white rounded-lg p-6 w-96 shadow-lg relative">
             <X className="absolute top-3 right-3 w-6 h-6 cursor-pointer" onClick={onClose} />
-            <h2 className="text-xl font-bold mb-4">설정</h2>
+            <h3 className="text-xl font-bold mb-2 text-left">설정</h3>
+            <p className="text-sm text-gray-600 mb-4 text-left">개인화된 AI 경험을 위해 설정을 변경하세요.</p>
+            <hr className="w-full border-gray-300 mb-4" />
             <div className="space-y-4 w-full">
               <button
                 className="w-full p-4 border rounded-lg hover:bg-blue-50 transition-colors font-bold"
@@ -65,7 +67,9 @@ const Settingbar = ({ isOpen, onClose }) => {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-2xl shadow-lg relative pb-20">
             <X className="absolute top-3 right-3 w-6 h-6 cursor-pointer" onClick={handleClose} />
-            <h2 className="text-xl font-bold mb-4">최적화 모델 선택</h2>
+            <h3 className="text-xl font-bold mb-2 text-left">최적화 모델 선택</h3>
+            <p className="text-sm text-gray-600 mb-4 text-left">최적의 응답을 생성할 AI 모델을 선택하세요.</p>
+            <hr className="w-full border-gray-300 mb-4" />
             <div className="grid grid-cols-3 gap-4 mb-6">
               {["GPT-3.5", "Claude", "Mixtral"].map((model) => (
                 <button
@@ -109,27 +113,36 @@ const Settingbar = ({ isOpen, onClose }) => {
       {/* 언어 선택 모달 */}
       {isLanguageSelectionOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md shadow-lg relative h-96 overflow-y-auto flex flex-col" onScroll={(e) => setShowConfirmButton(e.target.scrollTop + e.target.clientHeight >= e.target.scrollHeight)}>
-            <X className="absolute top-3 right-3 w-6 h-6 cursor-pointer" onClick={handleClose} />
-            <h2 className="text-xl font-bold mb-4">언어 선택</h2>
-            <div className="grid grid-cols-2 gap-2 mb-6">
-              {languages.map((lang) => (
-                <button
-                  key={lang}
-                  onClick={() => setSelectedLanguage(lang)}
-                  className={`p-2 border rounded-lg transition-colors ${selectedLanguage === lang ? "bg-blue-300" : "hover:bg-blue-50"}`}
-                >
-                  {lang}
-                </button>
-              ))}
+          <div className="bg-white rounded-lg w-full max-w-md max-h-[60vh] flex flex-col relative">
+            <div className="p-6">
+              <X className="absolute top-3 right-3 w-6 h-6 cursor-pointer" onClick={handleClose} />
+              <h3 className="text-xl font-bold mb-2 text-left">언어 선택</h3>
+              <p className="text-sm text-gray-600 mb-0.1 text-left">AI 응답할 언어를 선택하세요.</p>
             </div>
-            <button 
-              className={`px-6 py-3 rounded-lg transition-colors self-end mt-auto shadow-md ${selectedLanguage ? "bg-blue-500 text-white hover:bg-blue-600" : "bg-gray-300 text-gray-500 cursor-not-allowed"}`} 
-              onClick={handleConfirm}
-              disabled={!selectedLanguage}
-            >
-              확인
-            </button>
+            
+            <div className="flex-1 overflow-y-auto px-6 border-t">
+              <div className="grid grid-cols-2 gap-2 py-4">
+                {languages.map((lang) => (
+                  <button
+                    key={lang}
+                    onClick={() => setSelectedLanguage(lang)}
+                    className={`p-2 border rounded-lg transition-colors ${selectedLanguage === lang ? "bg-blue-300" : "hover:bg-blue-50"}`}
+                  >
+                    {lang}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="p-6 border-t">
+              <button 
+                className={`w-full px-6 py-3 rounded-lg transition-colors ${selectedLanguage ? "bg-blue-500 text-white hover:bg-blue-600" : "bg-gray-300 text-gray-500 cursor-not-allowed"}`} 
+                onClick={handleConfirm}
+                disabled={!selectedLanguage}
+              >
+                확인
+              </button>
+            </div>
           </div>
         </div>
       )}

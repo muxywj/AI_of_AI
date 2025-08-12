@@ -1,4 +1,5 @@
 import React from 'react';
+import { X } from 'lucide-react';
 
 const ModelSelectionModal = ({ isOpen, onClose, selectedModels, onModelSelect }) => {
   const availableModels = [
@@ -32,14 +33,15 @@ const ModelSelectionModal = ({ isOpen, onClose, selectedModels, onModelSelect })
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg w-80 max-h-[80vh] flex flex-col">
+      <div className="bg-white rounded-lg w-80 max-h-[60vh] flex flex-col relative"> 
         <div className="p-6">
-          <h2 className="text-xl font-semibold mb-4">AI 모델 선택</h2>
-          <p className="text-sm text-gray-600 mb-4">최소 1개, 최대 3개까지 선택 가능합니다.</p>
+          <X className="absolute top-3 right-3 w-6 h-6 cursor-pointer" onClick={onClose} />
+          <h3 className="text-xl font-bold mb-2 text-left">AI 모델 선택</h3>
+          <p className="text-sm text-gray-600 mb-0.1 text-left">기본 응답을 제공할 AI 모델을 선택하세요.<br/>(최소 1개, 최대 3개)</p>
         </div>
         
-        <div className="flex-1 overflow-y-auto px-6">
-          <div className="space-y-3 pb-4">
+        <div className="flex-1 overflow-y-auto px-6 border-t">
+          <div className="space-y-3 pb-4 pt-6">
             {availableModels.map((model) => (
               <label
                 key={model.id}
