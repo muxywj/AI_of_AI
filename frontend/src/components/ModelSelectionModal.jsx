@@ -35,8 +35,8 @@ const ModelSelectionModal = ({ isOpen, onClose, selectedModels, onModelSelect })
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg w-80 max-h-[60vh] flex flex-col relative"> 
         <div className="p-6">
-          <X className="absolute top-3 right-3 w-6 h-6 cursor-pointer" onClick={onClose} />
-          <h3 className="text-xl font-bold mb-2 text-left">AI 모델 선택</h3>
+          <X className="absolute top-3 right-3 w-6 h-6 cursor-pointer text-gray-500 hover:text-gray-700" onClick={onClose} />
+          <h3 className="text-xl font-bold mb-2 text-left" style={{ color: '#2d3e2c' }}>AI 모델 선택</h3>
           <p className="text-sm text-gray-600 mb-0.1 text-left">기본 응답을 제공할 AI 모델을 선택하세요.<br/>(최소 1개, 최대 3개)</p>
         </div>
         
@@ -47,11 +47,14 @@ const ModelSelectionModal = ({ isOpen, onClose, selectedModels, onModelSelect })
                 key={model.id}
                 className={`flex items-center p-3 rounded-lg border cursor-pointer transition-colors
                   ${selectedModels.includes(model.id) 
-                    ? 'border-purple-500 bg-purple-50' 
+                    ? 'border-gray-200 hover:bg-gray-50' 
                     : 'border-gray-200 hover:bg-gray-50'}
                   ${selectedModels.length >= 3 && !selectedModels.includes(model.id) 
                     ? 'opacity-50 cursor-not-allowed' 
                     : ''}`}
+                style={selectedModels.includes(model.id) 
+                  ? { borderColor: '#8ba88a', backgroundColor: 'white' } 
+                  : {}}
               >
                 <input
                   type="checkbox"
@@ -60,10 +63,7 @@ const ModelSelectionModal = ({ isOpen, onClose, selectedModels, onModelSelect })
                   disabled={selectedModels.length >= 3 && !selectedModels.includes(model.id)}
                   className="hidden"
                 />
-                <div className="flex-1">{model.name}</div>
-                {selectedModels.includes(model.id) && (
-                  <div className="w-4 h-4 rounded-full bg-purple-500"></div>
-                )}
+                <div className="flex-1" style={{ color: '#2d3e2c' }}>{model.name}</div>
               </label>
             ))}
           </div>
@@ -72,7 +72,10 @@ const ModelSelectionModal = ({ isOpen, onClose, selectedModels, onModelSelect })
         <div className="p-6 border-t">
           <button
             onClick={onClose}
-            className="w-full py-2 px-4 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+            className="w-full py-2 px-4 text-white rounded-lg transition-colors"
+            style={{ backgroundColor: '#5d7c5b' }}
+            onMouseEnter={(e) => e.target.style.backgroundColor = '#5d7c5b'}
+            onMouseLeave={(e) => e.target.style.backgroundColor = '#8ba88a'}
           >
             확인
           </button>
