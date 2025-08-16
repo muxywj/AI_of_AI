@@ -63,7 +63,7 @@ const MainPage = () => {
           <h1 className="text-xl font-semibold" style={{
             color: '#5d7c5b',
             fontWeight: 800
-          }}>Optimus</h1>
+          }}>AI OF AI</h1>
         </div>
         <div className="flex items-center space-x-4">
           <CirclePlus 

@@ -1,11 +1,24 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import WelcomePage from './pages/WelcomePage';
 import MainPage from './pages/MainPage';
-import { ChatProvider } from './context/ChatContext'; // ← 이 경로가 맞다면 그대로 사용
+import { ChatProvider } from './context/ChatContext';
 
 function App() {
+  const [showWelcome, setShowWelcome] = useState(true);
+  const [initialModels, setInitialModels] = useState([]);
+
+  const handleStartChat = (models) => {
+    setInitialModels(models);
+    setShowWelcome(false);
+  };
+
   return (
-    <ChatProvider>
-      <MainPage />
+    <ChatProvider initialModels={initialModels}>
+      {showWelcome ? (
+        <WelcomePage onStartChat={handleStartChat} />
+      ) : (
+        <MainPage />
+      )}
     </ChatProvider>
   );
 }

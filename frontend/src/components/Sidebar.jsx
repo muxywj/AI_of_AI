@@ -2,10 +2,10 @@ import React from "react";
 
 const Sidebar = () => {
   const quickPrompts = [
-    { title: "코드 작성 도움", desc: "웹사이트의 스타일리시한 헤더를 위한 코드" },
-    { title: "이미지 생성", desc: "취침 시간 이야기와 그림 만들기" },
-    { title: "텍스트 분석", desc: "이력서를 위한 강력한 문구 생성" },
-    { title: "문제 해결", desc: "빠른 문제 해결 방법 제안" }
+    { title: "이미지/문서 분석", desc: "OCR및 OLLAMA를 활용한 AI 분석" },
+    { title: "일정관리", desc: "AI로 스마트한 일정 계획 및 관리" },
+    { title: "비디오 분석", desc: "비디오 내용 분석 및 검색" },
+    //{ title: "문제 해결", desc: "빠른 문제 해결 방법 제안" }
   ];
 
   return (

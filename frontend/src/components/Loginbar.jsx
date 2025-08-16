@@ -18,24 +18,42 @@ const Loginbar = ({ onClose }) => {
           <button 
             className="w-full p-3 border border-gray-200 rounded-lg bg-white transition-colors font-medium"
             style={{ color: '#2d3e2c' }}
-            onMouseEnter={(e) => e.target.style.backgroundColor = '#f3f4f6'}
-            onMouseLeave={(e) => e.target.style.backgroundColor = 'white'}
+            onMouseEnter={(e) => {
+              e.target.style.backgroundColor = 'rgba(139, 168, 138, 0.05)';
+              e.target.style.borderColor = 'rgba(139, 168, 138, 0.4)';
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.backgroundColor = 'white';
+              e.target.style.borderColor = '#d1d5db';
+            }}
           >
             Google로 로그인
           </button>
           <button 
             className="w-full p-3 border border-gray-200 rounded-lg bg-white transition-colors font-medium"
             style={{ color: '#2d3e2c' }}
-            onMouseEnter={(e) => e.target.style.backgroundColor = '#f3f4f6'}
-            onMouseLeave={(e) => e.target.style.backgroundColor = 'white'}
+            onMouseEnter={(e) => {
+              e.target.style.backgroundColor = 'rgba(139, 168, 138, 0.05)';
+              e.target.style.borderColor = 'rgba(139, 168, 138, 0.4)';
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.backgroundColor = 'white';
+              e.target.style.borderColor = '#d1d5db';
+            }}
           >
             Kakao로 로그인
           </button>
           <button 
             className="w-full p-3 border border-gray-200 rounded-lg bg-white transition-colors font-medium"
             style={{ color: '#2d3e2c' }}
-            onMouseEnter={(e) => e.target.style.backgroundColor = '#f3f4f6'}
-            onMouseLeave={(e) => e.target.style.backgroundColor = 'white'}
+            onMouseEnter={(e) => {
+              e.target.style.backgroundColor = 'rgba(139, 168, 138, 0.05)';
+              e.target.style.borderColor = 'rgba(139, 168, 138, 0.4)';
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.backgroundColor = 'white';
+              e.target.style.borderColor = '#d1d5db';
+            }}
           >
             Naver로 로그인
           </button>

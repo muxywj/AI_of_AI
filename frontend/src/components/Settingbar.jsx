@@ -48,8 +48,14 @@ const Settingbar = ({ isOpen, onClose }) => {
               <button
                 className="w-full p-4 border border-gray-200 rounded-lg transition-colors font-bold"
                 style={{ color: '#2d3e2c', backgroundColor: 'white' }}
-                onMouseEnter={(e) => e.target.style.backgroundColor = '#f3f4f6'}
-                onMouseLeave={(e) => e.target.style.backgroundColor = 'white'}
+                onMouseEnter={(e) => {
+                  e.target.style.backgroundColor = 'rgba(139, 168, 138, 0.05)';
+                  e.target.style.borderColor = 'rgba(139, 168, 138, 0.4)';
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.backgroundColor = 'white';
+                  e.target.style.borderColor = '#d1d5db';
+                }}
                 onClick={() => setIsLanguageSelectionOpen(true)}
               >
                 언어 선택
@@ -57,8 +63,14 @@ const Settingbar = ({ isOpen, onClose }) => {
               <button
                 className="w-full p-4 border border-gray-200 rounded-lg transition-colors font-bold"
                 style={{ color: '#2d3e2c', backgroundColor: 'white' }}
-                onMouseEnter={(e) => e.target.style.backgroundColor = '#f3f4f6'}
-                onMouseLeave={(e) => e.target.style.backgroundColor = 'white'}
+                onMouseEnter={(e) => {
+                  e.target.style.backgroundColor = 'rgba(139, 168, 138, 0.05)';
+                  e.target.style.borderColor = 'rgba(139, 168, 138, 0.4)';
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.backgroundColor = 'white';
+                  e.target.style.borderColor = '#d1d5db';
+                }}
                 onClick={() => setIsAISelectionOpen(true)}
               >
                 최적화 모델 선택
@@ -86,14 +98,21 @@ const Settingbar = ({ isOpen, onClose }) => {
                       ? "" 
                       : ""
                   }`}
-                  style={selectedAI === model ? { borderColor: '#8ba88a', backgroundColor: 'white' } : { backgroundColor: 'white' }}
+                  style={selectedAI === model ? { 
+                    borderColor: 'rgba(139, 168, 138, 0.4)', 
+                    backgroundColor: 'rgba(139, 168, 138, 0.05)' 
+                  } : { backgroundColor: 'white' }}
                   onMouseEnter={(e) => {
                     if (selectedAI !== model) {
-                      e.target.style.backgroundColor = '#f3f4f6';
+                      e.currentTarget.style.backgroundColor = 'rgba(139, 168, 138, 0.05)';
+                      e.currentTarget.style.borderColor = 'rgba(139, 168, 138, 0.4)';
                     }
                   }}
                   onMouseLeave={(e) => {
-                    e.target.style.backgroundColor = 'white';
+                    if (selectedAI !== model) {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                      e.currentTarget.style.borderColor = '#d1d5db';
+                    }
                   }}
                 >
                   <h3 className="font-bold text-lg mb-2" style={{ color: '#2d3e2c' }}>{model}</h3>
@@ -129,7 +148,7 @@ const Settingbar = ({ isOpen, onClose }) => {
                   ? "text-white" 
                   : "bg-gray-300 text-gray-500 cursor-not-allowed"
               }`}
-              style={selectedAI ? { backgroundColor: '#5d7c5b' } : {}}
+              style={selectedAI ? { backgroundColor: '#8ba88a' } : {}}
               onMouseEnter={(e) => selectedAI && (e.target.style.backgroundColor = '#5d7c5b')}
               onMouseLeave={(e) => selectedAI && (e.target.style.backgroundColor = '#8ba88a')}
               disabled={!selectedAI}
@@ -157,14 +176,22 @@ const Settingbar = ({ isOpen, onClose }) => {
                     key={lang}
                     onClick={() => setSelectedLanguage(lang)}
                     className="p-2 border border-gray-200 rounded-lg transition-colors"
-                    style={selectedLanguage === lang ? { borderColor: '#8ba88a', backgroundColor: 'white', color: '#2d3e2c' } : { backgroundColor: 'white', color: '#2d3e2c' }}
+                    style={selectedLanguage === lang ? { 
+                      borderColor: 'rgba(139, 168, 138, 0.4)', 
+                      backgroundColor: 'rgba(139, 168, 138, 0.05)', 
+                      color: '#2d3e2c' 
+                    } : { backgroundColor: 'white', color: '#2d3e2c' }}
                     onMouseEnter={(e) => {
                       if (selectedLanguage !== lang) {
-                        e.target.style.backgroundColor = '#f3f4f6';
+                        e.target.style.backgroundColor = 'rgba(139, 168, 138, 0.05)';
+                        e.target.style.borderColor = 'rgba(139, 168, 138, 0.4)';
                       }
                     }}
                     onMouseLeave={(e) => {
-                      e.target.style.backgroundColor = 'white';
+                      if (selectedLanguage !== lang) {
+                        e.target.style.backgroundColor = 'white';
+                        e.target.style.borderColor = '#d1d5db';
+                      }
                     }}
                   >
                     {lang}
@@ -180,7 +207,7 @@ const Settingbar = ({ isOpen, onClose }) => {
                     ? "text-white" 
                     : "bg-gray-300 text-gray-500 cursor-not-allowed"
                 }`}
-                style={selectedLanguage ? { backgroundColor: '#5d7c5b' } : {}}
+                style={selectedLanguage ? { backgroundColor: '#8ba88a' } : {}}
                 onMouseEnter={(e) => selectedLanguage && (e.target.style.backgroundColor = '#5d7c5b')}
                 onMouseLeave={(e) => selectedLanguage && (e.target.style.backgroundColor = '#8ba88a')}
                 onClick={handleConfirm}

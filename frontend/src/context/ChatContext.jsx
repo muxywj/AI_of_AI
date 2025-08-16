@@ -1,99 +1,42 @@
-import React, { createContext, useState, useContext, useRef, useEffect } from "react";
+// context/ChatContext.jsx
+import React, { createContext, useContext, useState } from 'react';
 
-// ChatContext 생성
 const ChatContext = createContext();
 
-// ChatProvider 컴포넌트 (전역 상태 관리)
-export const ChatProvider = ({ children }) => {
-  const [messages, setMessages] = useState({
-    gpt: [],
-    claude: [],
-    mixtral: [],
-    optimal: []
-  });
+export const ChatProvider = ({ children, initialModels = [] }) => {
+  const [selectedModels, setSelectedModels] = useState(initialModels);
+  const [messages, setMessages] = useState({});
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedModels, setSelectedModels] = useState(["gpt", "claude", "mixtral"]);
-  const messagesEndRef = useRef(null);
 
-  // 스크롤을 자동으로 최신 메시지로 이동
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  // 메시지 추가 함수
-  const addMessage = (botName, text, isUser) => {
-    setMessages((prev) => ({
-      ...prev,
-      [botName]: [...(prev[botName] || []), { text, isUser }],
-    }));
-  };
-
-  // API 요청 함수 (AI 응답 받기)
-  const sendMessage = async (userMessage) => {
-    if (!userMessage.trim()) return;
-
-    setIsLoading(true);
-
-    // 선택된 모델들에 대해서만 메시지 처리
-    for (const modelId of selectedModels) {
-      // 사용자 메시지 추가
-      setMessages(prev => ({
-        ...prev,
-        [modelId]: [...(prev[modelId] || []), { text: userMessage, isUser: true }]
-      }));
-
-      try {
-        const response = await fetch(`http://localhost:8000/chat/${modelId}/`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ message: userMessage }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-        
-        // AI 응답 추가
-        setMessages(prev => ({
-          ...prev,
-          [modelId]: [...prev[modelId], { text: data.response, isUser: false }]
-        }));
-
-      } catch (error) {
-        console.error("Error:", error);
-        // 에러 메시지 추가
-        setMessages(prev => ({
-          ...prev,
-          [modelId]: [...prev[modelId], { text: "죄송합니다. 오류가 발생했습니다.", isUser: false }]
-        }));
-      }
+  // initialModels가 변경되면 selectedModels 업데이트
+  React.useEffect(() => {
+    if (initialModels.length > 0) {
+      setSelectedModels(initialModels);
     }
+  }, [initialModels]);
 
-    setIsLoading(false);
+  const sendMessage = (message) => {
+    // 메시지 전송 로직
   };
 
   return (
-    <ChatContext.Provider value={{ 
-      messages, 
-      sendMessage, 
-      isLoading,
+    <ChatContext.Provider value={{
       selectedModels,
-      setSelectedModels
+      setSelectedModels,
+      messages,
+      setMessages,
+      isLoading,
+      sendMessage
     }}>
       {children}
     </ChatContext.Provider>
   );
 };
 
-// ChatContext 사용을 위한 커스텀 훅
 export const useChat = () => {
   const context = useContext(ChatContext);
   if (!context) {
-    throw new Error("useChat must be used within a ChatProvider");
+    throw new Error('useChat must be used within a ChatProvider');
   }
   return context;
 };
