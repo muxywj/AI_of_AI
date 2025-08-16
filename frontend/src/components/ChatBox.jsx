@@ -75,7 +75,7 @@ const ChatBox = () => {
 
         /* 세련된 입력 영역 */
         .aiofai-input-area {
-          background: rgba(248, 246, 240, 0.4);
+          background: rgba(245, 242, 234, 0.4);
           backdrop-filter: blur(10px);
           border-top: 1px solid rgba(139, 168, 138, 0.15);
           padding: 1.2rem;
