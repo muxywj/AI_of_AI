@@ -24,6 +24,11 @@ const MainPage = () => {
     setIsSettingVisible(false);
   };
 
+  // 페이지 새로고침 함수
+  const handleRefresh = () => {
+    window.location.reload();
+  };
+
   // 배경 애니메이션 스타일
   const backgroundOverlayStyle = {
     position: 'fixed',
@@ -60,10 +65,17 @@ const MainPage = () => {
             className="w-6 h-6 text-gray-600 cursor-pointer transition-all duration-300 hover:scale-110" 
             onClick={() => setIsSidebarVisible(!isSidebarVisible)} 
           />
-          <h1 className="text-xl font-semibold" style={{
-            color: '#5d7c5b',
-            fontWeight: 800
-          }}>AI OF AI</h1>
+          <h1 
+            className="text-xl font-semibold cursor-pointer hover:opacity-80 transition-opacity" 
+            style={{
+              color: '#5d7c5b',
+              fontWeight: 800
+            }}
+            onClick={handleRefresh}
+            title="페이지 새로고침"
+          >
+            AI OF AI
+          </h1>
         </div>
         <div className="flex items-center space-x-4">
           <CirclePlus 
@@ -85,7 +97,7 @@ const MainPage = () => {
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {isSidebarVisible && <Sidebar />}
         <div className="flex-1 overflow-hidden">
-          <ChatBox selectedModels={selectedModels} />
+          <ChatBox />
         </div>
       </div>
 

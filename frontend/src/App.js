@@ -1,25 +1,27 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import WelcomePage from './pages/WelcomePage';
 import MainPage from './pages/MainPage';
 import { ChatProvider } from './context/ChatContext';
 
 function App() {
   const [showWelcome, setShowWelcome] = useState(true);
-  const [initialModels, setInitialModels] = useState([]);
+  const [selectedModels, setSelectedModels] = useState([]);
 
   const handleStartChat = (models) => {
-    setInitialModels(models);
+    setSelectedModels(models);
     setShowWelcome(false);
   };
 
   return (
-    <ChatProvider initialModels={initialModels}>
+    <div>
       {showWelcome ? (
         <WelcomePage onStartChat={handleStartChat} />
       ) : (
-        <MainPage />
+        <ChatProvider initialModels={selectedModels}>
+          <MainPage />
+        </ChatProvider>
       )}
-    </ChatProvider>
+    </div>
   );
 }
 

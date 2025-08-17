@@ -31,8 +31,8 @@ const WelcomePage = ({ onStartChat }) => {
   };
 
   const handleStartChat = () => {
-    if (selectedModels.length > 0) {
-      onStartChat(selectedModels); // onStartChat으로 수정
+    if (selectedModels.length > 0 && onStartChat) {
+      onStartChat(selectedModels);
     }
   };
 
@@ -146,8 +146,6 @@ const WelcomePage = ({ onStartChat }) => {
         .close-button {
           transition: all 0.2s ease;
         }
-
-        
       `}</style>
 
       {/* 네비게이션 바 */}
