@@ -1,10 +1,12 @@
 import React from "react";
+import { useNavigate } from "react-router-dom";
 
 const Sidebar = () => {
+  const navigate = useNavigate();
   const quickPrompts = [
-    { title: "이미지/문서 분석", desc: "OCR및 OLLAMA를 활용한 AI 분석" },
-    { title: "일정관리", desc: "AI로 스마트한 일정 계획 및 관리" },
-    { title: "비디오 분석", desc: "비디오 내용 분석 및 검색" },
+    { title: "이미지/문서 분석", desc: "OCR및 OLLAMA를 활용한 AI 분석",onClick: () => navigate("/ocr-tool")  },
+    { title: "일정관리", desc: "AI로 스마트한 일정 계획 및 관리",onClick: () => navigate("/schedule-management") },
+    { title: "비디오 분석", desc: "비디오 내용 분석 및 검색",onClick: () => navigate("/video-analysis")  },
     //{ title: "문제 해결", desc: "빠른 문제 해결 방법 제안" }
   ];
 
