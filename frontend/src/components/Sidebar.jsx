@@ -34,6 +34,7 @@ const Sidebar = () => {
           <div 
             key={index} 
             className="sidebar-item p-3 rounded-lg cursor-pointer transition-all duration-400 relative overflow-hidden"
+            onClick={prompt.onClick}
             style={{
               background: 'rgba(255, 255, 255, 0.8)',
               backdropFilter: 'blur(10px)',

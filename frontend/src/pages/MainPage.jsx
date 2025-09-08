@@ -10,6 +10,7 @@ import { logout } from "../store/authSlice";
 import { useNavigate } from "react-router-dom";
 import ModelSelectionModal from "../components/ModelSelectionModal";
 import { useChat } from "../context/ChatContext";
+import HeaderLogo from "../components/HeaderLogo";
 
 const MainPage = () => {
   const [isSidebarVisible, setIsSidebarVisible] = useState(false);
@@ -83,12 +84,7 @@ const MainPage = () => {
             className="w-6 h-6 text-gray-600 cursor-pointer transition-all duration-300 hover:scale-110"
             onClick={() => setIsSidebarVisible((v) => !v)}
           />
-          <h1
-            className="text-xl font-semibold cursor-pointer hover:opacity-80 transition-opacity"
-            style={{ color: "#5d7c5b", fontWeight: 800 }}
-          >
-            AI OF AI
-          </h1>
+        <HeaderLogo/>
         </div>
 
         {/* ▼ 여기부터 조건부 렌더(user ? ... : ...) */}
