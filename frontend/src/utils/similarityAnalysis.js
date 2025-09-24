@@ -8,20 +8,21 @@ import _ from 'lodash';
  * @returns {number} 유사도 점수 (0~1)
  */
 export const calculateTextSimilarity = (text1, text2) => {
-  // 텍스트 정규화 (소문자 변환, 특수문자 제거 등)
+  // 텍스트 정규화 (더 정교한 처리)
   const normalizeText = (text) => {
     return text
       .toLowerCase()
-      .replace(/[^\w\s]/g, '')
+      .replace(/[^\w\s가-힣]/g, ' ') // 한국어 문자 보존
+      .replace(/\s+/g, ' ') // 여러 공백을 하나로
       .trim();
   };
 
   const normalized1 = normalizeText(text1);
   const normalized2 = normalizeText(text2);
 
-  // 단어 집합 생성
-  const words1 = normalized1.split(/\s+/);
-  const words2 = normalized2.split(/\s+/);
+  // 단어 집합 생성 (빈 문자열 제거)
+  const words1 = normalized1.split(/\s+/).filter(word => word.length > 0);
+  const words2 = normalized2.split(/\s+/).filter(word => word.length > 0);
 
   // 자카드 유사도 계산 (교집합 / 합집합)
   const intersection = _.intersection(words1, words2).length;
@@ -30,9 +31,8 @@ export const calculateTextSimilarity = (text1, text2) => {
   const jaccardSimilarity = union === 0 ? 0 : intersection / union;
 
   // 코사인 유사도를 위한 텍스트 벡터화
-  const createWordVector = (text, wordSet) => {
+  const createWordVector = (words) => {
     const vector = {};
-    const words = text.split(/\s+/);
     
     // 각 단어의 빈도 계산
     words.forEach(word => {
@@ -50,8 +50,8 @@ export const calculateTextSimilarity = (text1, text2) => {
   const wordSet = _.union(words1, words2);
   
   // 각 텍스트의 단어 벡터 생성
-  const vector1 = createWordVector(normalized1, wordSet);
-  const vector2 = createWordVector(normalized2, wordSet);
+  const vector1 = createWordVector(words1);
+  const vector2 = createWordVector(words2);
 
   // 코사인 유사도 계산을 위한 내적 및 벡터 크기
   let dotProduct = 0;
@@ -75,7 +75,22 @@ export const calculateTextSimilarity = (text1, text2) => {
   const cosineSimilarity = (magnitude1 * magnitude2 === 0) ? 0 : dotProduct / (magnitude1 * magnitude2);
 
   // 최종 유사도 점수 (자카드와 코사인의 가중 평균)
-  return (jaccardSimilarity * 0.4) + (cosineSimilarity * 0.6);
+  const finalSimilarity = (jaccardSimilarity * 0.4) + (cosineSimilarity * 0.6);
+  
+  // 디버깅 로그
+  console.log('Similarity Analysis:', {
+    text1: text1.substring(0, 50) + '...',
+    text2: text2.substring(0, 50) + '...',
+    words1: words1,
+    words2: words2,
+    intersection: intersection,
+    union: union,
+    jaccardSimilarity: jaccardSimilarity.toFixed(3),
+    cosineSimilarity: cosineSimilarity.toFixed(3),
+    finalSimilarity: finalSimilarity.toFixed(3)
+  });
+  
+  return finalSimilarity;
 };
 
 /**

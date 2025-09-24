@@ -1,12 +1,184 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Send, CirclePlus, Image as ImageIcon, File as FileIcon, X } from "lucide-react";
+import { Send, CirclePlus, Image as ImageIcon, File as FileIcon, X, BarChart3 } from "lucide-react";
 import { useChat } from "../context/ChatContext";
+import SimilarityDetailModal from "./SimilarityDetailModal";
 
-// 이미지가 아닌 일반 파일 허용 확장자 목록 (필요시 추가/수정)
+// Optimal Response Renderer Component
+const OptimalResponseRenderer = ({ content }) => {
+  const parseOptimalResponse = (text) => {
+    // content가 없거나 undefined인 경우 빈 객체 반환
+    if (!text || typeof text !== 'string') {
+      return {};
+    }
+    
+    const sections = {};
+    const lines = text.split('\n');
+    let currentSection = '';
+    let currentContent = [];
+    
+    for (const line of lines) {
+             if (line.startsWith('## 통합 답변') || line.startsWith('## 🎯 통합 답변')) {
+               if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
+               currentSection = 'integrated';
+               currentContent = [];
+             } else if (line.startsWith('## 각 AI 분석') || line.startsWith('## 📊 각 AI 분석')) {
+               if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
+               currentSection = 'analysis';
+               currentContent = [];
+             } else if (line.startsWith('## 분석 근거') || line.startsWith('## 🔍 분석 근거')) {
+               if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
+               currentSection = 'rationale';
+               currentContent = [];
+             } else if (line.startsWith('## 최종 추천') || line.startsWith('## 🏆 최종 추천')) {
+               if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
+               currentSection = 'recommendation';
+               currentContent = [];
+             } else if (line.startsWith('## 추가 인사이트') || line.startsWith('## 💡 추가 인사이트')) {
+               if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
+               currentSection = 'insights';
+               currentContent = [];
+             } else if (line.trim() !== '') {
+        currentContent.push(line);
+      }
+    }
+    
+    if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
+    return sections;
+  };
+
+  const parseAIAnalysis = (analysisText) => {
+    const analyses = {};
+    const lines = analysisText.split('\n');
+    let currentAI = '';
+    let currentAnalysis = { pros: [], cons: [] };
+    
+    for (const line of lines) {
+      if (line.startsWith('### ')) {
+        if (currentAI) {
+          analyses[currentAI] = currentAnalysis;
+        }
+        currentAI = line.replace('### ', '').trim();
+        currentAnalysis = { pros: [], cons: [] };
+      } else if (line.includes('- 장점:')) {
+        currentAnalysis.pros.push(line.replace('- 장점:', '').trim());
+      } else if (line.includes('- 단점:')) {
+        currentAnalysis.cons.push(line.replace('- 단점:', '').trim());
+      }
+    }
+    
+    if (currentAI) {
+      analyses[currentAI] = currentAnalysis;
+    }
+    
+    return analyses;
+  };
+
+  // content가 없으면 기본 메시지 표시
+  if (!content || typeof content !== 'string') {
+    return (
+      <div className="optimal-response-container">
+        <div className="optimal-section integrated-answer">
+          <h3 className="section-title">
+            최적 답변
+          </h3>
+          <div className="section-content">
+            최적의 답변을 생성 중입니다...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const sections = parseOptimalResponse(content);
+  const analysisData = sections.analysis ? parseAIAnalysis(sections.analysis) : {};
+
+  return (
+    <div className="optimal-response-container">
+             {sections.integrated && (
+               <div className="optimal-section integrated-answer">
+                 <h3 className="section-title">
+                   최적 답변
+                 </h3>
+                 <div className="section-content">
+                   {sections.integrated}
+                 </div>
+               </div>
+             )}
+      
+             {Object.keys(analysisData).length > 0 && (
+               <div className="optimal-section ai-analysis">
+                 <h3 className="section-title">
+                   각 AI 분석
+                 </h3>
+          <div className="analysis-grid">
+            {Object.entries(analysisData).map(([aiName, analysis]) => (
+              <div key={aiName} className="ai-analysis-card">
+                <h4 className="ai-name">{aiName}</h4>
+                {analysis.pros.length > 0 && (
+                  <div className="analysis-item pros">
+                    <span className="pros-label">장점:</span>
+                    <ul>
+                      {analysis.pros.map((pro, index) => (
+                        <li key={index}>{pro}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {analysis.cons.length > 0 && (
+                  <div className="analysis-item cons">
+                    <span className="cons-label">단점:</span>
+                    <ul>
+                      {analysis.cons.map((con, index) => (
+                        <li key={index}>{con}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      
+             {sections.rationale && (
+               <div className="optimal-section rationale">
+                 <h3 className="section-title">
+                   분석 근거
+                 </h3>
+                 <div className="section-content">
+                   {sections.rationale}
+                 </div>
+               </div>
+             )}
+             
+             {sections.recommendation && (
+               <div className="optimal-section recommendation">
+                 <h3 className="section-title">
+                   최종 추천
+                 </h3>
+                 <div className="section-content">
+                   {sections.recommendation}
+                 </div>
+               </div>
+             )}
+             
+             {sections.insights && (
+               <div className="optimal-section insights">
+                 <h3 className="section-title">
+                   추가 인사이트
+                 </h3>
+                 <div className="section-content">
+                   {sections.insights}
+                 </div>
+               </div>
+             )}
+    </div>
+  );
+};
+
+// PDF와 이미지 파일 허용 확장자 목록
 const ALLOWED_FILE_EXTS = [
-  ".pdf", ".txt", ".csv", ".md",
-  ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-  ".zip", ".rar", ".json"
+  ".pdf", ".jpg", ".jpeg", ".png", ".bmp", ".tiff"
 ];
 
 const ChatBox = () => {
@@ -33,6 +205,10 @@ const ChatBox = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef(null);
   const plusBtnRef = useRef(null);
+
+  // 유사도 분석 관련 상태
+  const [similarityData, setSimilarityData] = useState({});
+  const [isSimilarityModalOpen, setIsSimilarityModalOpen] = useState(false);
 
   // 메시지 컬럼별 끝 ref 준비
   useEffect(() => {
@@ -100,8 +276,14 @@ const ChatBox = () => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
 
-    if (file.type?.startsWith("image/")) {
-      alert("파일 업로드에서는 이미지가 아닌 파일만 선택할 수 있어요.");
+    // PDF와 이미지 파일 모두 허용
+    const allowedTypes = [
+      'application/pdf',
+      'image/jpeg', 'image/jpg', 'image/png', 'image/bmp', 'image/tiff'
+    ];
+    
+    if (!allowedTypes.includes(file.type)) {
+      alert("PDF 또는 이미지 파일만 업로드할 수 있습니다.");
       e.target.value = "";
       return;
     }
@@ -211,6 +393,7 @@ const ChatBox = () => {
 
   const loadingText = isLoading ? "분석중…" : "";
 
+
   return (
     <div className="h-full w-full flex flex-col" style={{ background: "rgba(245, 242, 234, 0.4)" }}>
       <style jsx>{`
@@ -259,6 +442,111 @@ const ChatBox = () => {
           box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
           line-height: 1.6;
           position: relative;
+        }
+        
+        .optimal-response {
+          background: rgba(255, 255, 255, 0.95) !important;
+          border: 2px solid rgba(139, 168, 138, 0.3) !important;
+          padding: 1.5rem !important;
+          border-radius: 16px !important;
+          max-width: 95% !important;
+          box-shadow: 0 8px 32px rgba(139, 168, 138, 0.15) !important;
+        }
+        
+        .optimal-response-container {
+          width: 100%;
+        }
+        
+        .optimal-section {
+          margin-bottom: 1.5rem;
+          padding: 1rem;
+          border-bottom: 1px solid #e5e7eb;
+        }
+        
+        .optimal-section:last-child {
+          margin-bottom: 0;
+          border-bottom: none;
+        }
+        
+        .section-title {
+          margin: 0 0 1rem 0;
+          font-size: 1rem;
+          font-weight: 600;
+          color: #374151;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+        }
+        
+        .section-content {
+          color: #374151;
+          line-height: 1.6;
+          font-size: 0.95rem;
+        }
+        
+        .analysis-grid {
+          display: flex;
+          flex-direction: column;
+          gap: 1rem;
+        }
+        
+        .ai-analysis-card {
+          border-radius: 4px;
+          padding: 1rem;
+          border: 1px solid #e5e7eb;
+          margin-bottom: 1rem;
+          background: #f9fafb;
+        }
+        
+        .ai-analysis-card:last-child {
+          margin-bottom: 0;
+        }
+        
+        .ai-name {
+          margin: 0 0 0.75rem 0;
+          font-size: 0.9rem;
+          font-weight: 600;
+          color: #374151;
+          border-bottom: 1px solid #d1d5db;
+          padding-bottom: 0.5rem;
+        }
+        
+        .analysis-item {
+          margin-bottom: 0.75rem;
+        }
+        
+        .analysis-item:last-child {
+          margin-bottom: 0;
+        }
+        
+        .pros-label {
+          color: #374151;
+          font-weight: 600;
+          font-size: 0.9rem;
+        }
+        
+        .cons-label {
+          color: #374151;
+          font-weight: 600;
+          font-size: 0.9rem;
+        }
+        
+        .analysis-item ul {
+          margin: 0.5rem 0 0 1rem;
+          padding: 0;
+        }
+        
+        .analysis-item li {
+          margin-bottom: 0.25rem;
+          font-size: 0.9rem;
+          line-height: 1.5;
+          color: #4b5563;
+        }
+        
+        .integrated-answer,
+        .rationale,
+        .recommendation,
+        .insights {
+          border-bottom-color: #e5e7eb;
         }
         .aiofai-input-box {
           background: white;
@@ -415,10 +703,83 @@ const ChatBox = () => {
             <div className="h-full px-4 py-3">
               {messages[modelId]?.map((message, index) => {
                 const isUser = !!message.isUser;
+                const isOptimal = modelId === "optimal";
+                
+                // 유사도 분석 데이터 가져오기
+                let hasSimilarityData = null;
+                if (isOptimal && !isUser) {
+                  // 메시지에 직접 포함된 유사도 분석 데이터 사용
+                  hasSimilarityData = message.similarityData;
+                  
+                  // 디버깅용 로그
+                  console.log('Optimal message ID:', message.id);
+                  console.log('Optimal message:', message);
+                  console.log('Has similarity data:', !!hasSimilarityData);
+                  if (hasSimilarityData) {
+                    console.log('Similarity data:', hasSimilarityData);
+                  }
+                }
+                
                 return (
                   <div key={`${modelId}-${index}`} className={`flex ${isUser ? "justify-end" : "justify-start"} mb-4`}>
-                    <div className={`${isUser ? "aiofai-user-message" : "aiofai-bot-message"}`}>
-                      <div>{message.text}</div>
+                    <div className={`${isUser ? "aiofai-user-message" : "aiofai-bot-message"} ${isOptimal && !isUser ? "optimal-response" : ""}`}>
+                      {isOptimal && !isUser ? (
+                        <div>
+                          <OptimalResponseRenderer content={message.text} />
+                          
+                          {/* 유사도 분석 결과 버튼 (유사도 데이터가 있는 경우) */}
+                          {hasSimilarityData && (
+                            <div className="mt-3 flex justify-center">
+                              <button
+                                onClick={() => {
+                                  setSimilarityData(hasSimilarityData);
+                                  setIsSimilarityModalOpen(true);
+                                }}
+                                className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg transition-colors font-medium"
+                                title="유사도 분석 결과 보기"
+                              >
+                                <BarChart3 size={16} />
+                                유사도 분석 결과
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div>
+                          {/* 사용자가 업로드한 파일들 표시 */}
+                          {message.files && message.files.length > 0 ? (
+                            <div className="flex flex-wrap gap-2">
+                              {message.files.map((file, fileIndex) => (
+                                <div key={fileIndex} className="relative">
+                                  {file.type.startsWith('image/') ? (
+                                    <div>
+                                      <img
+                                        src={file.dataUrl}
+                                        alt={file.name}
+                                        className="max-w-xs max-h-48 rounded-lg border border-gray-200 object-cover"
+                                      />
+                                      <div className="text-xs text-gray-500 mt-1 text-center">
+                                        {file.name}
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center gap-2 p-2 bg-gray-100 rounded-lg border border-gray-200">
+                                      <div className="text-gray-600">
+                                        📄
+                                      </div>
+                                      <span className="text-sm text-gray-700 truncate max-w-32">
+                                        {file.name}
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div>{message.text}</div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -475,8 +836,7 @@ const ChatBox = () => {
         <input
           ref={fileInputRef}
           type="file"
-          // 이미지 제외한 확장자만 명시
-          accept={ALLOWED_FILE_EXTS.join(",")}
+          accept=".pdf,.jpg,.jpeg,.png,.bmp,.tiff,image/*,application/pdf"
           onChange={handleFileChange}
           style={{ display: "none" }}
         />
@@ -534,6 +894,13 @@ const ChatBox = () => {
           )}
         </form>
       </div>
+
+      {/* 유사도 분석 모달 */}
+      <SimilarityDetailModal
+        isOpen={isSimilarityModalOpen}
+        onClose={() => setIsSimilarityModalOpen(false)}
+        similarityData={similarityData}
+      />
     </div>
   );
 };
