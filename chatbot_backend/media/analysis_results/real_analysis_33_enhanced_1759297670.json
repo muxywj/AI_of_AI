@@ -1,0 +1,538 @@
+{
+  "success": true,
+  "video_summary": {
+    "total_detections": 10,
+    "unique_persons": 1,
+    "detailed_attribute_statistics": {
+      "object_type": {
+        "person": 5
+      }
+    },
+    "temporal_analysis": {
+      "peak_time_seconds": 0,
+      "peak_person_count": 5,
+      "average_person_count": 5.0,
+      "total_time_span": 3,
+      "activity_distribution": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      }
+    },
+    "scene_diversity": {
+      "scene_type_distribution": {
+        "simple": 5
+      },
+      "activity_level_distribution": {
+        "low": 5
+      },
+      "lighting_distribution": {
+        "dark": 5
+      },
+      "diversity_score": 0.2
+    },
+    "quality_assessment": {
+      "overall_score": 0.38,
+      "status": "fair",
+      "brightness_score": 0.471,
+      "contrast_score": 0.07,
+      "sharpness_score": 0.013,
+      "color_balance_score": 0.964,
+      "confidence_average": 0.38
+    },
+    "analysis_type": "enhanced_opencv_analysis",
+    "key_insights": [
+      "영상 품질이 보통입니다",
+      "주요 장면 유형: simple",
+      "주요 활동 수준: low",
+      "어두운 영상입니다"
+    ]
+  },
+  "frame_results": [
+    {
+      "image_id": 1,
+      "timestamp": 0.0,
+      "frame_image_path": "images/video33_frame1.jpg",
+      "persons": [
+        {
+          "class": "person",
+          "bbox": [
+            0.1,
+            0.1,
+            0.9,
+            0.9
+          ],
+          "confidence": 0.8,
+          "confidence_level": 0.25,
+          "attributes": {
+            "gender": {
+              "value": "person",
+              "confidence": 0.7,
+              "all_scores": {
+                "a person": 0.7,
+                "a man": 0.2,
+                "a woman": 0.1
+              },
+              "top_3": [
+                [
+                  "a person",
+                  0.7
+                ],
+                [
+                  "a man",
+                  0.2
+                ],
+                [
+                  "a woman",
+                  0.1
+                ]
+              ]
+            },
+            "age": {
+              "value": "adult",
+              "confidence": 0.6,
+              "all_scores": {
+                "a child": 0.1,
+                "a teenager": 0.2,
+                "a young adult": 0.3,
+                "a middle-aged person": 0.6,
+                "an elderly person": 0.1
+              },
+              "top_3": [
+                [
+                  "a middle-aged person",
+                  0.6
+                ],
+                [
+                  "a young adult",
+                  0.3
+                ],
+                [
+                  "a teenager",
+                  0.2
+                ]
+              ]
+            },
+            "detailed_clothing": {
+              "value": "wearing casual clothes",
+              "confidence": 0.5,
+              "all_scores": {
+                "wearing casual clothes": 0.5,
+                "wearing formal clothes": 0.3,
+                "wearing sportswear": 0.2
+              },
+              "top_3": [
+                [
+                  "wearing casual clothes",
+                  0.5
+                ],
+                [
+                  "wearing formal clothes",
+                  0.3
+                ],
+                [
+                  "wearing sportswear",
+                  0.2
+                ]
+              ]
+            }
+          }
+        }
+      ],
+      "objects": [],
+      "scene_attributes": {
+        "scene_type": "indoor",
+        "lighting": "dark",
+        "activity_level": "low"
+      }
+    },
+    {
+      "image_id": 2,
+      "timestamp": 0.7333333333333333,
+      "frame_image_path": "images/video33_frame2.jpg",
+      "persons": [
+        {
+          "class": "person",
+          "bbox": [
+            0.1,
+            0.1,
+            0.9,
+            0.9
+          ],
+          "confidence": 0.8,
+          "confidence_level": 0.25,
+          "attributes": {
+            "gender": {
+              "value": "person",
+              "confidence": 0.7,
+              "all_scores": {
+                "a person": 0.7,
+                "a man": 0.2,
+                "a woman": 0.1
+              },
+              "top_3": [
+                [
+                  "a person",
+                  0.7
+                ],
+                [
+                  "a man",
+                  0.2
+                ],
+                [
+                  "a woman",
+                  0.1
+                ]
+              ]
+            },
+            "age": {
+              "value": "adult",
+              "confidence": 0.6,
+              "all_scores": {
+                "a child": 0.1,
+                "a teenager": 0.2,
+                "a young adult": 0.3,
+                "a middle-aged person": 0.6,
+                "an elderly person": 0.1
+              },
+              "top_3": [
+                [
+                  "a middle-aged person",
+                  0.6
+                ],
+                [
+                  "a young adult",
+                  0.3
+                ],
+                [
+                  "a teenager",
+                  0.2
+                ]
+              ]
+            },
+            "detailed_clothing": {
+              "value": "wearing casual clothes",
+              "confidence": 0.5,
+              "all_scores": {
+                "wearing casual clothes": 0.5,
+                "wearing formal clothes": 0.3,
+                "wearing sportswear": 0.2
+              },
+              "top_3": [
+                [
+                  "wearing casual clothes",
+                  0.5
+                ],
+                [
+                  "wearing formal clothes",
+                  0.3
+                ],
+                [
+                  "wearing sportswear",
+                  0.2
+                ]
+              ]
+            }
+          }
+        }
+      ],
+      "objects": [],
+      "scene_attributes": {
+        "scene_type": "indoor",
+        "lighting": "dark",
+        "activity_level": "low"
+      }
+    },
+    {
+      "image_id": 3,
+      "timestamp": 1.5,
+      "frame_image_path": "images/video33_frame3.jpg",
+      "persons": [
+        {
+          "class": "person",
+          "bbox": [
+            0.1,
+            0.1,
+            0.9,
+            0.9
+          ],
+          "confidence": 0.8,
+          "confidence_level": 0.25,
+          "attributes": {
+            "gender": {
+              "value": "person",
+              "confidence": 0.7,
+              "all_scores": {
+                "a person": 0.7,
+                "a man": 0.2,
+                "a woman": 0.1
+              },
+              "top_3": [
+                [
+                  "a person",
+                  0.7
+                ],
+                [
+                  "a man",
+                  0.2
+                ],
+                [
+                  "a woman",
+                  0.1
+                ]
+              ]
+            },
+            "age": {
+              "value": "adult",
+              "confidence": 0.6,
+              "all_scores": {
+                "a child": 0.1,
+                "a teenager": 0.2,
+                "a young adult": 0.3,
+                "a middle-aged person": 0.6,
+                "an elderly person": 0.1
+              },
+              "top_3": [
+                [
+                  "a middle-aged person",
+                  0.6
+                ],
+                [
+                  "a young adult",
+                  0.3
+                ],
+                [
+                  "a teenager",
+                  0.2
+                ]
+              ]
+            },
+            "detailed_clothing": {
+              "value": "wearing casual clothes",
+              "confidence": 0.5,
+              "all_scores": {
+                "wearing casual clothes": 0.5,
+                "wearing formal clothes": 0.3,
+                "wearing sportswear": 0.2
+              },
+              "top_3": [
+                [
+                  "wearing casual clothes",
+                  0.5
+                ],
+                [
+                  "wearing formal clothes",
+                  0.3
+                ],
+                [
+                  "wearing sportswear",
+                  0.2
+                ]
+              ]
+            }
+          }
+        }
+      ],
+      "objects": [],
+      "scene_attributes": {
+        "scene_type": "indoor",
+        "lighting": "dark",
+        "activity_level": "low"
+      }
+    },
+    {
+      "image_id": 4,
+      "timestamp": 2.2333333333333334,
+      "frame_image_path": "images/video33_frame4.jpg",
+      "persons": [
+        {
+          "class": "person",
+          "bbox": [
+            0.1,
+            0.1,
+            0.9,
+            0.9
+          ],
+          "confidence": 0.8,
+          "confidence_level": 0.25,
+          "attributes": {
+            "gender": {
+              "value": "person",
+              "confidence": 0.7,
+              "all_scores": {
+                "a person": 0.7,
+                "a man": 0.2,
+                "a woman": 0.1
+              },
+              "top_3": [
+                [
+                  "a person",
+                  0.7
+                ],
+                [
+                  "a man",
+                  0.2
+                ],
+                [
+                  "a woman",
+                  0.1
+                ]
+              ]
+            },
+            "age": {
+              "value": "adult",
+              "confidence": 0.6,
+              "all_scores": {
+                "a child": 0.1,
+                "a teenager": 0.2,
+                "a young adult": 0.3,
+                "a middle-aged person": 0.6,
+                "an elderly person": 0.1
+              },
+              "top_3": [
+                [
+                  "a middle-aged person",
+                  0.6
+                ],
+                [
+                  "a young adult",
+                  0.3
+                ],
+                [
+                  "a teenager",
+                  0.2
+                ]
+              ]
+            },
+            "detailed_clothing": {
+              "value": "wearing casual clothes",
+              "confidence": 0.5,
+              "all_scores": {
+                "wearing casual clothes": 0.5,
+                "wearing formal clothes": 0.3,
+                "wearing sportswear": 0.2
+              },
+              "top_3": [
+                [
+                  "wearing casual clothes",
+                  0.5
+                ],
+                [
+                  "wearing formal clothes",
+                  0.3
+                ],
+                [
+                  "wearing sportswear",
+                  0.2
+                ]
+              ]
+            }
+          }
+        }
+      ],
+      "objects": [],
+      "scene_attributes": {
+        "scene_type": "indoor",
+        "lighting": "dark",
+        "activity_level": "low"
+      }
+    },
+    {
+      "image_id": 5,
+      "timestamp": 2.966666666666667,
+      "frame_image_path": "images/video33_frame5.jpg",
+      "persons": [
+        {
+          "class": "person",
+          "bbox": [
+            0.1,
+            0.1,
+            0.9,
+            0.9
+          ],
+          "confidence": 0.8,
+          "confidence_level": 0.25,
+          "attributes": {
+            "gender": {
+              "value": "person",
+              "confidence": 0.7,
+              "all_scores": {
+                "a person": 0.7,
+                "a man": 0.2,
+                "a woman": 0.1
+              },
+              "top_3": [
+                [
+                  "a person",
+                  0.7
+                ],
+                [
+                  "a man",
+                  0.2
+                ],
+                [
+                  "a woman",
+                  0.1
+                ]
+              ]
+            },
+            "age": {
+              "value": "adult",
+              "confidence": 0.6,
+              "all_scores": {
+                "a child": 0.1,
+                "a teenager": 0.2,
+                "a young adult": 0.3,
+                "a middle-aged person": 0.6,
+                "an elderly person": 0.1
+              },
+              "top_3": [
+                [
+                  "a middle-aged person",
+                  0.6
+                ],
+                [
+                  "a young adult",
+                  0.3
+                ],
+                [
+                  "a teenager",
+                  0.2
+                ]
+              ]
+            },
+            "detailed_clothing": {
+              "value": "wearing casual clothes",
+              "confidence": 0.5,
+              "all_scores": {
+                "wearing casual clothes": 0.5,
+                "wearing formal clothes": 0.3,
+                "wearing sportswear": 0.2
+              },
+              "top_3": [
+                [
+                  "wearing casual clothes",
+                  0.5
+                ],
+                [
+                  "wearing formal clothes",
+                  0.3
+                ],
+                [
+                  "wearing sportswear",
+                  0.2
+                ]
+              ]
+            }
+          }
+        }
+      ],
+      "objects": [],
+      "scene_attributes": {
+        "scene_type": "indoor",
+        "lighting": "dark",
+        "activity_level": "low"
+      }
+    }
+  ]
+}

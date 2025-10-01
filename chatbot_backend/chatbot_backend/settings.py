@@ -15,6 +15,10 @@ ALLOWED_HOSTS = ['*']  # 필요한 도메인 추가
 ROOT_URLCONF = 'chatbot_backend.urls'
 STATIC_URL = '/static/'
 
+# Media files
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -45,12 +49,28 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS 설정 - credentials와 함께 사용할 때는 와일드카드 사용 불가
+CORS_ALLOW_ALL_ORIGINS = False
 
-# CORS 설정
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:3002",
+]
+
+# credentials 허용
+CORS_ALLOW_CREDENTIALS = True
+
+# 허용할 헤더 추가
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
 ]
 SECRET_KEY = 'fl)a4kismb2m2=vhr+g2u!yn#q#z51=!4t1ftu)^-6lvm!_%bg'
 
@@ -75,6 +95,18 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.AllowAny',
     ]
 }
+
+# OAuth 설정
+GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '94821981810-32iorb0jccvsdi4jq3pp3mc6rvmb0big.apps.googleusercontent.com')
+GOOGLE_SECRET_KEY = os.getenv('GOOGLE_SECRET_KEY', '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')
+GOOGLE_REDIRECT_URI = os.getenv('GOOGLE_REDIRECT_URI', 'http://localhost:8000/api/auth/google/callback')
+
+KAKAO_CLIENT_ID = os.getenv('KAKAO_CLIENT_ID', '8bfca9df8364fead1243d41c773ec5a2')
+KAKAO_REDIRECT_URI = os.getenv('KAKAO_REDIRECT_URI', 'http://localhost:3000/auth/kakao/callback')
+
+NAVER_CLIENT_ID = os.getenv('NAVER_CLIENT_ID', '')
+NAVER_CLIENT_SECRET = os.getenv('NAVER_CLIENT_SECRET', '')
+NAVER_REDIRECT_URI = os.getenv('NAVER_REDIRECT_URI', 'http://localhost:3000/')
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',

@@ -88,7 +88,7 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
                    }
                  }
 
-                 const response = await fetch(`http://localhost:8001/chat/${modelId}/`, {
+                 const response = await fetch(`http://localhost:8000/chat/${modelId}/`, {
             method: 'POST',
             body: formData
           });
@@ -253,7 +253,7 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
                    }
                  }
 
-                 const response = await fetch(`http://localhost:8001/chat/optimal/`, {
+                 const response = await fetch(`http://localhost:8000/chat/optimal/`, {
             method: 'POST',
             body: formData
           });

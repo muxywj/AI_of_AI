@@ -1,11 +1,11 @@
 // src/pages/MainPage.js
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import Loginbar from "../components/Loginbar";
 import Settingbar from "../components/Settingbar";
 import Sidebar from "../components/Sidebar";
 import ChatBox from "../components/ChatBox";
-import { Menu, Settings, UserCircle, CirclePlus } from "lucide-react";
+import { Menu, Settings, UserCircle, CirclePlus, Video } from "lucide-react";
 import { logout } from "../store/authSlice";
 import { useNavigate } from "react-router-dom";
 import ModelSelectionModal from "../components/ModelSelectionModal";
@@ -23,12 +23,23 @@ const MainPage = () => {
   const dispatch = useDispatch();
   const navigate = useNavigate();
 
+  // 로그인 성공 시 로그인 모달 자동 닫기
+  useEffect(() => {
+    if (user && isLoginVisible) {
+      setIsLoginVisible(false);
+    }
+  }, [user, isLoginVisible]);
+
   const toggleSetting = () => {
     setIsSettingVisible((v) => !v);
     setIsLoginVisible(false);
   };
 
   const toggleLogin = () => {
+    // 이미 로그인된 상태라면 로그인 모달을 열지 않음
+    if (user) {
+      return;
+    }
     setIsLoginVisible((v) => !v);
     setIsSettingVisible(false);
   };
@@ -37,7 +48,7 @@ const MainPage = () => {
     localStorage.removeItem("accessToken");
     localStorage.removeItem("user");
     dispatch(logout());
-    navigate("/");
+    // 로그아웃 후 Welcome 페이지로 이동하지 않고 현재 페이지 유지
   };
 
   // 배경 애니메이션 스타일
@@ -56,7 +67,8 @@ const MainPage = () => {
     zIndex: -1,
   };
 
-  const displayName = user?.nickname || user?.username || "";
+  // 사용자 이름 표시 로직 개선
+  const displayName = user?.full_name || user?.first_name || user?.username || "";
 
   return (
     <div
@@ -92,18 +104,26 @@ const MainPage = () => {
           {user ? (
             // 로그인된 상태
             <div className="flex items-center space-x-3">
-              <span className="text-gray-700 font-medium">
-                {displayName}
-              </span>
+              <div className="flex items-center space-x-2">
+                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                <span className="text-gray-700 font-medium">
+                  {displayName}님
+                </span>
+              </div>
 
               <button
                 onClick={handleLogout}
-                className="text-sm text-gray-600 hover:text-gray-800 transition-colors"
+                className="text-sm text-gray-600 hover:text-gray-800 transition-colors px-2 py-1 rounded hover:bg-gray-100"
                 title="로그아웃"
               >
                 로그아웃
               </button>
 
+              <Video
+                className="w-6 h-6 text-gray-600 cursor-pointer transition-all duration-300 hover:scale-110"
+                onClick={() => navigate('/video-chat')}
+                title="영상 채팅"
+              />
               <CirclePlus
                 className="w-6 h-6 text-gray-600 cursor-pointer transition-all duration-300 hover:scale-110"
                 onClick={() => setIsModelModalOpen(true)}
@@ -118,6 +138,11 @@ const MainPage = () => {
           ) : (
             // 로그인되지 않은 상태
             <>
+              <Video
+                className="w-6 h-6 text-gray-600 cursor-pointer transition-all duration-300 hover:scale-110"
+                onClick={() => navigate('/video-chat')}
+                title="영상 채팅"
+              />
               <CirclePlus
                 className="w-6 h-6 text-gray-600 cursor-pointer transition-all duration-300 hover:scale-110"
                 onClick={() => setIsModelModalOpen(true)}

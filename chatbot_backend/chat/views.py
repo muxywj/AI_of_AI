@@ -1,7 +1,16 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from chat.serializers import UserSerializer
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.authentication import TokenAuthentication
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.parsers import MultiPartParser, FormParser
+from django.http import HttpResponse, Http404
+from chat.serializers import UserSerializer, VideoChatSessionSerializer, VideoChatMessageSerializer, VideoAnalysisCacheSerializer
+from chat.models import VideoChatSession, VideoChatMessage, VideoAnalysisCache, Video
+from .services.video_analysis_service import video_analysis_service
+from django.utils import timezone
+import threading
 import openai
 import anthropic
 from groq import Groq
@@ -20,6 +29,10 @@ import base64
 import tempfile
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
+import requests
+import uuid
+from django.contrib.auth import get_user_model
+from chat.models import User, SocialAccount
 
 # 인코딩 문제 해결을 위한 설정
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -600,3 +613,980 @@ class ChatView(APIView):
             return Response({'response': response})
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+def generate_unique_username(email, name=None):
+    """이메일 기반으로 고유한 사용자명 생성"""
+    base_username = email.split('@')[0]
+    username = base_username
+    counter = 1
+    
+    while User.objects.filter(username=username).exists():
+        username = f"{base_username}_{counter}"
+        counter += 1
+    
+    return username
+
+@api_view(['GET'])
+@authentication_classes([TokenAuthentication])
+@permission_classes([AllowAny])
+def google_callback(request):
+    try:
+        # 액세스 토큰 추출
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return Response(
+                {'error': '잘못된 인증 헤더'}, 
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        access_token = auth_header.split(' ')[1]
+
+        # Google API로 사용자 정보 요청
+        user_info_response = requests.get(
+            'https://www.googleapis.com/oauth2/v3/userinfo',
+            headers={'Authorization': f'Bearer {access_token}'}
+        )
+
+        if user_info_response.status_code != 200:
+            return Response(
+                {'error': 'Google에서 사용자 정보를 가져오는데 실패했습니다'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user_info = user_info_response.json()
+        email = user_info.get('email')
+        name = user_info.get('name')
+        
+        if not email:
+            return Response(
+                {'error': '이메일이 제공되지 않았습니다'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # 기존 사용자 검색
+            user = User.objects.get(email=email)
+            # 기존 사용자의 이름이 없으면 업데이트
+            if name and (not user.first_name and not user.last_name):
+                if ' ' in name:
+                    first_name, last_name = name.split(' ', 1)
+                    user.first_name = first_name
+                    user.last_name = last_name
+                else:
+                    user.first_name = name
+                user.save()
+        except User.DoesNotExist:
+            # 새로운 사용자 생성
+            username = generate_unique_username(email, name)
+            user = User.objects.create(
+                username=username,
+                email=email,
+                is_active=True
+            )
+            
+            # 이름 설정
+            if name:
+                if ' ' in name:
+                    first_name, last_name = name.split(' ', 1)
+                    user.first_name = first_name
+                    user.last_name = last_name
+                else:
+                    user.first_name = name
+            
+            # 기본 비밀번호 설정 (선택적)
+            random_password = uuid.uuid4().hex
+            user.set_password(random_password)
+            user.save()
+
+        # 소셜 계정 정보 생성 또는 업데이트
+        social_account, created = SocialAccount.objects.get_or_create(
+            email=email,
+            provider='google',
+            defaults={'user': user}
+        )
+
+        if not created and social_account.user != user:
+            social_account.user = user
+            social_account.save()
+
+        # 사용자 정보 직렬화
+        serializer = UserSerializer(user)
+        
+        return Response({
+            'message': '구글 로그인 성공',
+            'user': serializer.data
+        })
+        
+    except Exception as e:
+        return Response(
+            {'error': str(e)}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@authentication_classes([TokenAuthentication])
+@permission_classes([AllowAny])
+def kakao_callback(request):
+    """카카오 로그인 콜백"""
+    try:
+        data = request.data
+        access_token = data.get('access_token')
+        
+        if not access_token:
+            return Response(
+                {'error': '액세스 토큰이 제공되지 않았습니다'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 카카오 API로 사용자 정보 가져오기
+        user_info_response = requests.get(
+            'https://kapi.kakao.com/v2/user/me',
+            headers={'Authorization': f'Bearer {access_token}'}
+        )
+        
+        if user_info_response.status_code != 200:
+            return Response(
+                {'error': '카카오에서 사용자 정보를 가져오는데 실패했습니다'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user_info = user_info_response.json()
+        kakao_account = user_info.get('kakao_account', {})
+        profile = kakao_account.get('profile', {})
+        
+        email = kakao_account.get('email')
+        name = profile.get('nickname')
+        
+        if not email:
+            return Response(
+                {'error': '이메일이 제공되지 않았습니다'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            # 기존 사용자 검색
+            user = User.objects.get(email=email)
+            # 기존 사용자의 이름이 없으면 업데이트
+            if name and (not user.first_name and not user.last_name):
+                user.first_name = name
+                user.save()
+        except User.DoesNotExist:
+            # 새로운 사용자 생성
+            username = generate_unique_username(email, name)
+            user = User.objects.create(
+                username=username,
+                email=email,
+                is_active=True
+            )
+            
+            # 이름 설정
+            if name:
+                user.first_name = name
+            
+            # 기본 비밀번호 설정 (선택적)
+            random_password = uuid.uuid4().hex
+            user.set_password(random_password)
+            user.save()
+        
+        # 소셜 계정 정보 생성 또는 업데이트
+        social_account, created = SocialAccount.objects.get_or_create(
+            email=email,
+            provider='kakao',
+            defaults={'user': user}
+        )
+        
+        if not created and social_account.user != user:
+            social_account.user = user
+            social_account.save()
+        
+        serializer = UserSerializer(user)
+        return Response({
+            'message': '카카오 로그인 성공',
+            'user': serializer.data
+        })
+        
+    except Exception as e:
+        return Response(
+            {'error': str(e)}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@authentication_classes([TokenAuthentication])
+@permission_classes([AllowAny])
+def naver_callback(request):
+    """네이버 로그인 콜백"""
+    try:
+        data = request.data
+        access_token = data.get('access_token')
+        
+        if not access_token:
+            return Response(
+                {'error': '액세스 토큰이 제공되지 않았습니다'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 네이버 API로 사용자 정보 가져오기
+        user_info_response = requests.get(
+            'https://openapi.naver.com/v1/nid/me',
+            headers={'Authorization': f'Bearer {access_token}'}
+        )
+        
+        if user_info_response.status_code != 200:
+            return Response(
+                {'error': '네이버에서 사용자 정보를 가져오는데 실패했습니다'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user_info = user_info_response.json()
+        response_data = user_info.get('response', {})
+        
+        email = response_data.get('email')
+        name = response_data.get('name')
+        nickname = response_data.get('nickname')
+        
+        if not email:
+            return Response(
+                {'error': '이메일이 제공되지 않았습니다'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 이름이 없으면 닉네임 사용
+        display_name = name or nickname
+        
+        try:
+            # 기존 사용자 검색
+            user = User.objects.get(email=email)
+            # 기존 사용자의 이름이 없으면 업데이트
+            if display_name and (not user.first_name and not user.last_name):
+                user.first_name = display_name
+                user.save()
+        except User.DoesNotExist:
+            # 새로운 사용자 생성
+            username = generate_unique_username(email, display_name)
+            user = User.objects.create(
+                username=username,
+                email=email,
+                is_active=True
+            )
+            
+            # 이름 설정
+            if display_name:
+                user.first_name = display_name
+            
+            # 기본 비밀번호 설정 (선택적)
+            random_password = uuid.uuid4().hex
+            user.set_password(random_password)
+            user.save()
+        
+        # 소셜 계정 정보 생성 또는 업데이트
+        social_account, created = SocialAccount.objects.get_or_create(
+            email=email,
+            provider='naver',
+            defaults={'user': user}
+        )
+        
+        if not created and social_account.user != user:
+            social_account.user = user
+            social_account.save()
+        
+        serializer = UserSerializer(user)
+        return Response({
+            'message': '네이버 로그인 성공',
+            'user': serializer.data
+        })
+        
+    except Exception as e:
+        return Response(
+            {'error': str(e)}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+class VideoUploadView(APIView):
+    """영상 업로드 뷰 - 독립적인 영상 처리"""
+    permission_classes = [AllowAny]  # 임시로 AllowAny로 변경
+    parser_classes = (MultiPartParser, FormParser)
+    
+    def post(self, request):
+        try:
+            import os
+            import uuid
+            import time
+            from django.core.files.storage import default_storage
+            from django.conf import settings
+            
+            # 업로드된 파일 확인 (backend_videochat 방식)
+            if 'video' not in request.FILES:
+                return Response({
+                    'error': '비디오 파일이 없습니다'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            video_file = request.FILES['video']
+            
+            # 파일 확장자 검증 (backend_videochat 방식)
+            if not video_file.name.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')):
+                return Response({
+                    'error': '지원하지 않는 파일 형식입니다'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 고유한 파일명 생성 (backend_videochat 방식)
+            timestamp = int(time.time())
+            filename = f"upload_{timestamp}_{video_file.name}"
+            
+            # 파일 저장 (backend_videochat 방식)
+            from django.core.files.base import ContentFile
+            file_path = default_storage.save(
+                f'uploads/{filename}',
+                ContentFile(video_file.read())
+            )
+            full_path = os.path.join(settings.MEDIA_ROOT, file_path)
+            
+            # Create Video model instance (backend_videochat 방식)
+            video = Video.objects.create(
+                filename=filename,
+                original_name=video_file.name,
+                file_path=file_path,
+                file_size=video_file.size,
+                file=file_path,  # file 필드도 저장
+                analysis_status='pending'
+            )
+            
+            # 백그라운드에서 영상 분석 시작
+            def analyze_video_background():
+                try:
+                    print(f"🎬 백그라운드 영상 분석 시작: {video.id}")
+                    analysis_result = video_analysis_service.analyze_video(file_path, video.id)
+                    if analysis_result:
+                        print(f"✅ 영상 분석 완료: {video.id}")
+                        # Video 모델 업데이트
+                        video.analysis_status = 'completed'
+                        video.is_analyzed = True
+                        video.save()
+                    else:
+                        print(f"❌ 영상 분석 실패: {video.id}")
+                        video.analysis_status = 'failed'
+                        video.save()
+                except Exception as e:
+                    print(f"❌ 백그라운드 분석 오류: {e}")
+                    video.analysis_status = 'failed'
+                    video.save()
+            
+            # 별도 스레드에서 분석 실행
+            analysis_thread = threading.Thread(target=analyze_video_background)
+            analysis_thread.daemon = True
+            analysis_thread.start()
+            
+            return Response({
+                'success': True,
+                'video_id': video.id,
+                'filename': filename,
+                'message': f'비디오 "{video_file.name}"이 성공적으로 업로드되었습니다.'
+            })
+                
+        except Exception as e:
+            return Response({
+                'error': f'영상 업로드 중 오류 발생: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class VideoListView(APIView):
+    """비디오 목록 조회 - backend_videochat 방식"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        try:
+            videos = Video.objects.all()
+            video_list = []
+            
+            for video in videos:
+                video_data = {
+                    'id': video.id,
+                    'filename': video.filename,
+                    'original_name': video.original_name,
+                    'duration': video.duration,
+                    'is_analyzed': video.is_analyzed,
+                    'analysis_status': video.analysis_status,
+                    'uploaded_at': video.uploaded_at,
+                    'file_size': video.file_size
+                }
+                video_list.append(video_data)
+            
+            return Response({
+                'videos': video_list,
+                'count': len(video_list)
+            })
+            
+        except Exception as e:
+            return Response({
+                'error': f'비디오 목록 조회 중 오류 발생: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class VideoAnalysisView(APIView):
+    """영상 분석 상태 확인 및 시작 - backend_videochat 방식"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request, video_id):
+        try:
+            video = Video.objects.get(id=video_id)
+            
+            # 진행률 정보 추출
+            progress_info = {
+                'analysis_progress': video.analysis_progress,
+                'analysis_message': video.analysis_message or ''
+            }
+            
+            return Response({
+                'video_id': video.id,
+                'filename': video.filename,
+                'original_name': video.original_name,
+                'analysis_status': video.analysis_status,
+                'is_analyzed': video.is_analyzed,
+                'duration': video.duration,
+                'uploaded_at': video.uploaded_at,
+                'file_size': video.file_size,
+                'analysis_json_path': video.analysis_json_path,
+                'frame_images_path': video.frame_images_path,
+                'progress': progress_info
+            })
+        except Video.DoesNotExist:
+            return Response({
+                'error': '영상을 찾을 수 없습니다'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'error': f'영상 분석 조회 중 오류 발생: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    def post(self, request, video_id):
+        """영상 분석 시작"""
+        try:
+            video = Video.objects.get(id=video_id)
+            
+            # 이미 분석 중이거나 완료된 경우
+            if video.analysis_status == 'pending':
+                return Response({
+                    'message': '이미 분석이 진행 중입니다.',
+                    'status': 'pending'
+                })
+            elif video.analysis_status == 'completed':
+                return Response({
+                    'message': '이미 분석이 완료되었습니다.',
+                    'status': 'completed'
+                })
+            
+            # 분석 상태를 pending으로 변경
+            video.analysis_status = 'pending'
+            video.save()
+            
+            # 백그라운드에서 영상 분석 시작
+            def analyze_video_background():
+                try:
+                    print(f"🎬 백그라운드 영상 분석 시작: {video.id}")
+                    analysis_result = video_analysis_service.analyze_video(video.file_path, video.id)
+                    if analysis_result:
+                        print(f"✅ 영상 분석 완료: {video.id}")
+                        # Video 모델 업데이트
+                        video.analysis_status = 'completed'
+                        video.is_analyzed = True
+                        video.save()
+                    else:
+                        print(f"❌ 영상 분석 실패: {video.id}")
+                        video.analysis_status = 'failed'
+                        video.save()
+                except Exception as e:
+                    print(f"❌ 백그라운드 분석 오류: {e}")
+                    video.analysis_status = 'failed'
+                    video.save()
+            
+            # 별도 스레드에서 분석 실행
+            analysis_thread = threading.Thread(target=analyze_video_background)
+            analysis_thread.daemon = True
+            analysis_thread.start()
+            
+            return Response({
+                'message': '영상 분석을 시작했습니다.',
+                'status': 'pending'
+            })
+            
+        except Video.DoesNotExist:
+            return Response({
+                'error': '영상을 찾을 수 없습니다'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'error': f'영상 분석 시작 중 오류 발생: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class VideoChatView(APIView):
+    """영상 채팅 뷰 - 다중 AI 응답 및 통합"""
+    permission_classes = [AllowAny]  # 임시로 AllowAny로 변경
+    
+    def get(self, request, video_id=None):
+        """채팅 세션 목록 조회"""
+        try:
+            print(f"🔍 VideoChatView GET 요청 - video_id: {video_id}")
+            
+            # 사용자 정보 처리 (인증되지 않은 경우 기본 사용자 사용)
+            user = None
+            if hasattr(request, 'user') and request.user.is_authenticated:
+                user = request.user
+            else:
+                # 기본 사용자 생성 또는 가져오기
+                from chat.models import User
+                user, created = User.objects.get_or_create(
+                    username='anonymous',
+                    defaults={'email': 'anonymous@example.com'}
+                )
+                print(f"✅ 기본 사용자 생성/가져오기: {user.username}")
+            
+            if video_id:
+                # 특정 영상의 채팅 세션 조회
+                sessions = VideoChatSession.objects.filter(
+                    user=user, 
+                    video_id=video_id,
+                    is_active=True
+                ).order_by('-created_at')
+            else:
+                # 사용자의 모든 채팅 세션 조회
+                sessions = VideoChatSession.objects.filter(
+                    user=user,
+                    is_active=True
+                ).order_by('-created_at')
+            
+            serializer = VideoChatSessionSerializer(sessions, many=True)
+            return Response({
+                'sessions': serializer.data,
+                'total_count': sessions.count()
+            })
+            
+        except Exception as e:
+            return Response({
+                'error': f'채팅 세션 조회 중 오류 발생: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    def post(self, request, video_id):
+        """영상 채팅 메시지 전송"""
+        try:
+            print(f"🔍 VideoChatView POST 요청 - video_id: {video_id}")
+            # Django WSGIRequest에서 JSON 데이터 파싱
+            import json
+            if hasattr(request, 'data'):
+                message = request.data.get('message')
+            else:
+                body = request.body.decode('utf-8')
+                data = json.loads(body)
+                message = data.get('message')
+            print(f"📝 메시지: {message}")
+            
+            if not message:
+                return Response({
+                    'error': '메시지가 필요합니다'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 영상 분석 상태 확인 (Video 모델에서 직접 확인)
+            try:
+                video = Video.objects.get(id=video_id)
+                if video.analysis_status == 'pending':
+                    return Response({
+                        'error': '영상 분석이 진행 중입니다. 잠시 후 다시 시도해주세요.',
+                        'status': 'analyzing'
+                    }, status=status.HTTP_202_ACCEPTED)
+                elif video.analysis_status == 'failed':
+                    return Response({
+                        'error': '영상 분석에 실패했습니다. 다른 영상을 업로드해주세요.',
+                        'status': 'failed'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            except Video.DoesNotExist:
+                return Response({
+                    'error': '영상을 찾을 수 없습니다'
+                }, status=status.HTTP_404_NOT_FOUND)
+            
+            # 사용자 정보 처리 (인증되지 않은 경우 기본 사용자 사용)
+            user = request.user if request.user.is_authenticated else None
+            if not user:
+                # 기본 사용자 생성 또는 가져오기
+                from chat.models import User
+                user, created = User.objects.get_or_create(
+                    username='anonymous',
+                    defaults={'email': 'anonymous@example.com'}
+                )
+            
+            # 채팅 세션 가져오기 또는 생성
+            session, created = VideoChatSession.objects.get_or_create(
+                user=user,
+                video_id=video_id,
+                is_active=True,
+                defaults={
+                    'video_title': f"Video {video_id}",
+                    'video_analysis_data': {}
+                }
+            )
+            
+            # 사용자 메시지 저장
+            user_message = VideoChatMessage.objects.create(
+                session=session,
+                message_type='user',
+                content=message
+            )
+            
+            # 영상 분석 데이터 가져오기 (Video 모델에서 직접)
+            analysis_data = {
+                'original_name': video.original_name,
+                'file_size': video.file_size,
+                'uploaded_at': video.uploaded_at.isoformat(),
+                'analysis_status': video.analysis_status,
+                'duration': video.duration,
+                'is_analyzed': video.is_analyzed
+            }
+            
+            # JSON 분석 결과 로드
+            analysis_json_data = None
+            if video.analysis_json_path:
+                try:
+                    from django.conf import settings
+                    json_path = os.path.join(settings.MEDIA_ROOT, video.analysis_json_path)
+                    print(f"🔍 JSON 파일 경로: {json_path}")
+                    print(f"🔍 파일 존재 여부: {os.path.exists(json_path)}")
+                    
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        analysis_json_data = json.load(f)
+                    print(f"✅ JSON 분석 결과 로드 성공: {json_path}")
+                    print(f"📊 JSON 데이터 키: {list(analysis_json_data.keys())}")
+                    if 'frame_results' in analysis_json_data:
+                        print(f"📊 frame_results 개수: {len(analysis_json_data['frame_results'])}")
+                        if analysis_json_data['frame_results']:
+                            print(f"📊 첫 번째 프레임: {analysis_json_data['frame_results'][0]}")
+                except Exception as e:
+                    print(f"❌ JSON 분석 결과 로드 실패: {e}")
+                    import traceback
+                    print(f"❌ 상세 오류: {traceback.format_exc()}")
+            else:
+                print("❌ analysis_json_path가 없습니다.")
+                print(f"❌ video.analysis_json_path: {video.analysis_json_path}")
+            
+            # 프레임 검색 및 이미지 URL 생성
+            print(f"🔍 프레임 검색 시작 - analysis_json_data: {analysis_json_data is not None}")
+            if analysis_json_data:
+                print(f"📊 frame_results 존재: {'frame_results' in analysis_json_data}")
+                if 'frame_results' in analysis_json_data:
+                    print(f"📊 frame_results 개수: {len(analysis_json_data['frame_results'])}")
+            else:
+                print("❌ analysis_json_data가 None입니다!")
+                print(f"❌ video.analysis_json_path: {video.analysis_json_path}")
+                print(f"❌ video.analysis_status: {video.analysis_status}")
+                print(f"❌ video.is_analyzed: {video.is_analyzed}")
+            
+            relevant_frames = self._find_relevant_frames(message, analysis_json_data, video_id)
+            print(f"🔍 검색된 프레임 수: {len(relevant_frames)}")
+            if relevant_frames:
+                print(f"📸 첫 번째 프레임: {relevant_frames[0]}")
+            else:
+                print("❌ 검색된 프레임이 없습니다!")
+            
+            # 다중 AI 응답 생성
+            ai_responses = {}
+            individual_messages = []
+            
+            # 기본 채팅 시스템과 동일한 AI 모델 초기화
+            try:
+                # 전역 chatbots 변수 사용 (이미 초기화되어 있음)
+                print(f"✅ 사용 가능한 AI 모델: {list(chatbots.keys())}")
+            except Exception as e:
+                print(f"⚠️ AI 모델 초기화 실패: {e}")
+                # 전역 chatbots 변수는 이미 초기화되어 있으므로 덮어쓰지 않음
+            
+            # AI 모델 확인
+            print(f"🤖 사용 가능한 AI 모델: {list(chatbots.keys()) if chatbots else 'None'}")
+            
+            # AI 모델이 없는 경우 기본 응답 (프레임 정보 포함)
+            if not chatbots:
+                print("⚠️ 사용 가능한 AI 모델이 없습니다. 기본 응답을 생성합니다.")
+                
+                # 프레임 정보를 포함한 더 나은 응답 생성
+                if relevant_frames:
+                    frame_count = len(relevant_frames)
+                    default_response = f"영상에서 '{message}'와 관련된 {frame_count}개의 프레임을 찾았습니다!\n\n"
+                    
+                    for i, frame in enumerate(relevant_frames, 1):
+                        default_response += f"📸 프레임 {i}:\n"
+                        default_response += f"   ⏰ 시간: {frame['timestamp']:.1f}초\n"
+                        default_response += f"   🎯 관련도: {frame['relevance_score']}점\n"
+                        
+                        if frame['persons'] and len(frame['persons']) > 0:
+                            default_response += f"   👤 사람 {len(frame['persons'])}명 감지\n"
+                        
+                        if frame['objects'] and len(frame['objects']) > 0:
+                            default_response += f"   📦 객체 {len(frame['objects'])}개 감지\n"
+                        
+                        scene_attrs = frame.get('scene_attributes', {})
+                        if scene_attrs:
+                            scene_type = scene_attrs.get('scene_type', 'unknown')
+                            lighting = scene_attrs.get('lighting', 'unknown')
+                            activity = scene_attrs.get('activity_level', 'unknown')
+                            default_response += f"   🏞️ 장면: {scene_type}, 조명: {lighting}, 활동: {activity}\n"
+                        
+                        default_response += "\n"
+                    
+                    default_response += "💡 AI 모델이 활성화되면 더 자세한 분석을 제공할 수 있습니다."
+                else:
+                    default_response = f"죄송합니다. '{message}'와 관련된 프레임을 찾을 수 없습니다.\n\n"
+                    default_response += "다른 키워드로 시도해보세요:\n"
+                    default_response += "• 사람, 자동차, 동물, 음식, 옷, 건물, 자연, 물체"
+                
+                ai_responses = {
+                    'default': default_response
+                }
+            else:
+                # 각 AI 모델에 질문 전송
+                for bot_name, chatbot in chatbots.items():
+                    if bot_name == 'optimal':
+                        continue  # optimal은 나중에 처리
+                    
+                    try:
+                        # 영상 정보와 프레임 정보를 포함한 프롬프트 생성
+                        video_context = f"""
+영상 정보:
+- 파일명: {analysis_data.get('original_name', 'Unknown')}
+- 파일 크기: {analysis_data.get('file_size', 0) / (1024*1024):.1f}MB
+- 업로드 시간: {analysis_data.get('uploaded_at', 'Unknown')}
+- 상태: {analysis_data.get('analysis_status', 'Unknown')}
+"""
+                        
+                        # 관련 프레임 정보 추가
+                        frame_context = ""
+                        if relevant_frames:
+                            frame_context = "\n\n관련 프레임 정보:\n"
+                            for i, frame in enumerate(relevant_frames, 1):
+                                frame_context += f"프레임 {i}: 시간 {frame['timestamp']:.1f}초, 관련도 {frame['relevance_score']}점\n"
+                                if frame['persons']:
+                                    frame_context += f"  - 사람 {len(frame['persons'])}명 감지\n"
+                                if frame['objects']:
+                                    frame_context += f"  - 객체 {len(frame['objects'])}개 감지\n"
+                                scene_attrs = frame.get('scene_attributes', {})
+                                if scene_attrs:
+                                    frame_context += f"  - 장면: {scene_attrs.get('scene_type', 'unknown')}, 조명: {scene_attrs.get('lighting', 'unknown')}\n"
+                        
+                        enhanced_message = f"""{video_context}{frame_context}
+
+사용자 질문: {message}
+
+위 영상과 관련 프레임 정보를 참고하여 답변해주세요."""
+                        
+                        # 기본 채팅 시스템과 동일한 방식으로 응답 생성
+                        ai_response = chatbot.chat(enhanced_message)
+                        ai_responses[bot_name] = ai_response
+                        
+                        # 개별 AI 응답 저장
+                        ai_message = VideoChatMessage.objects.create(
+                            session=session,
+                            message_type='ai',
+                            content=ai_response,
+                            ai_model=bot_name,
+                            parent_message=user_message
+                        )
+                        individual_messages.append(ai_message)
+                        
+                    except Exception as e:
+                        print(f"AI {bot_name} 응답 생성 실패: {str(e)}")
+                        continue
+            
+            # 통합 응답 생성 (기본 채팅 시스템과 동일한 방식)
+            optimal_response = ""
+            if ai_responses and len(ai_responses) > 1:
+                try:
+                    # 기본 채팅 시스템의 generate_optimal_response 사용
+                    optimal_response = generate_optimal_response(ai_responses, message, os.getenv('OPENAI_API_KEY'))
+                    
+                    # 프레임 정보 추가
+                    if relevant_frames:
+                        frame_summary = f"\n\n📸 관련 프레임 {len(relevant_frames)}개 발견:\n"
+                        for i, frame in enumerate(relevant_frames, 1):
+                            frame_summary += f"• 프레임 {i}: {frame['timestamp']:.1f}초 (관련도 {frame['relevance_score']}점)\n"
+                        optimal_response += frame_summary
+                    
+                    # 통합 응답 저장
+                    optimal_message = VideoChatMessage.objects.create(
+                        session=session,
+                        message_type='ai_optimal',
+                        content=optimal_response,
+                        ai_model='optimal',
+                        parent_message=user_message
+                    )
+                    
+                except Exception as e:
+                    print(f"통합 응답 생성 실패: {str(e)}")
+                    optimal_response = f"통합 응답 생성 중 오류가 발생했습니다: {str(e)}"
+            elif ai_responses and len(ai_responses) == 1:
+                # AI 응답이 하나만 있는 경우
+                optimal_response = list(ai_responses.values())[0]
+            
+            # 응답 데이터 구성
+            response_data = {
+                'session_id': str(session.id),
+                'user_message': {
+                    'id': str(user_message.id),
+                    'content': message,
+                    'created_at': user_message.created_at
+                },
+                'ai_responses': {
+                    'individual': [
+                        {
+                            'id': str(msg.id),
+                            'model': msg.ai_model,
+                            'content': msg.content,
+                            'created_at': msg.created_at
+                        } for msg in individual_messages
+                    ],
+                    'optimal': {
+                        'content': optimal_response,
+                        'created_at': individual_messages[0].created_at if individual_messages else None
+                    } if optimal_response else None
+                },
+                'relevant_frames': relevant_frames  # 관련 프레임 정보 추가
+            }
+            
+            # 디버깅: relevant_frames 확인
+            print(f"🔍 응답 생성 시 relevant_frames: {len(relevant_frames)}")
+            if relevant_frames:
+                print(f"📸 첫 번째 프레임: {relevant_frames[0]}")
+            else:
+                print("❌ relevant_frames가 비어있음!")
+            
+            print(f"📤 응답에 포함될 프레임 수: {len(relevant_frames)}")
+            if relevant_frames:
+                print(f"📸 첫 번째 프레임: {relevant_frames[0]}")
+            
+            return Response(response_data)
+            
+        except Exception as e:
+            import traceback
+            print(f"❌ VideoChatView POST 오류: {str(e)}")
+            print(f"❌ 오류 상세: {traceback.format_exc()}")
+            return Response({
+                'error': f'채팅 처리 중 오류 발생: {str(e)}',
+                'traceback': traceback.format_exc()
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _find_relevant_frames(self, message, analysis_json_data, video_id):
+        """사용자 메시지에 따라 관련 프레임을 찾아서 이미지 URL과 함께 반환"""
+        try:
+            if not analysis_json_data or 'frame_results' not in analysis_json_data:
+                print("❌ 분석 데이터 또는 프레임 결과가 없습니다.")
+                return []
+            
+            relevant_frames = []
+            message_lower = message.lower()
+            
+            # 프레임 결과에서 매칭되는 프레임 찾기
+            frame_results = analysis_json_data.get('frame_results', [])
+            print(f"🔍 검색할 프레임 수: {len(frame_results)}")
+            
+            # 모든 프레임을 기본적으로 포함 (사람 검색의 경우)
+            if any(keyword in message_lower for keyword in ['사람', 'person', 'people', 'human', '찾아', '보여']):
+                print("👤 사람 검색 모드")
+                for frame in frame_results:
+                    frame_info = {
+                        'image_id': frame.get('image_id', 0),
+                        'timestamp': frame.get('timestamp', 0),
+                        'frame_image_path': frame.get('frame_image_path', ''),
+                        'image_url': f'/api/video/{video_id}/frame/{frame.get("image_id", 0)}/',
+                        'persons': frame.get('persons', []),
+                        'objects': frame.get('objects', []),
+                        'scene_attributes': frame.get('scene_attributes', {}),
+                        'relevance_score': 10  # 사람 검색 시 모든 프레임에 높은 점수
+                    }
+                    relevant_frames.append(frame_info)
+                    print(f"✅ 프레임 {frame_info['image_id']} 추가 (사람 검색)")
+            
+            # 다른 키워드 검색
+            else:
+                search_keywords = {
+                    '자동차': ['car', 'vehicle', 'automobile'],
+                    '동물': ['animal', 'dog', 'cat', 'pet'],
+                    '음식': ['food', 'meal', 'eat', 'drink'],
+                    '옷': ['clothing', 'clothes', 'dress', 'shirt'],
+                    '건물': ['building', 'house', 'structure'],
+                    '자연': ['nature', 'tree', 'sky', 'mountain'],
+                    '물체': ['object', 'item', 'thing']
+                }
+                
+                # 한국어 키워드 추출
+                matched_keywords = []
+                for korean_key, english_keywords in search_keywords.items():
+                    if korean_key in message_lower:
+                        matched_keywords.extend(english_keywords)
+                
+                for frame in frame_results:
+                    frame_score = 0
+                    frame_info = {
+                        'image_id': frame.get('image_id', 0),
+                        'timestamp': frame.get('timestamp', 0),
+                        'frame_image_path': frame.get('frame_image_path', ''),
+                        'image_url': f'/api/video/{video_id}/frame/{frame.get("image_id", 0)}/',
+                        'persons': frame.get('persons', []),
+                        'objects': frame.get('objects', []),
+                        'scene_attributes': frame.get('scene_attributes', {}),
+                        'relevance_score': 0
+                    }
+                    
+                    # 객체 검색
+                    for obj in frame_info['objects']:
+                        obj_class = obj.get('class', '').lower()
+                        if any(keyword in obj_class for keyword in matched_keywords):
+                            frame_score += 5
+                    
+                    # 장면 속성 검색
+                    scene_attrs = frame_info['scene_attributes']
+                    if 'outdoor' in message_lower and scene_attrs.get('scene_type') == 'outdoor':
+                        frame_score += 3
+                    if 'indoor' in message_lower and scene_attrs.get('scene_type') == 'indoor':
+                        frame_score += 3
+                    if 'bright' in message_lower and scene_attrs.get('lighting') == 'bright':
+                        frame_score += 2
+                    if 'dark' in message_lower and scene_attrs.get('lighting') == 'dark':
+                        frame_score += 2
+                    
+                    if frame_score > 0:
+                        frame_info['relevance_score'] = frame_score
+                        relevant_frames.append(frame_info)
+                        print(f"✅ 프레임 {frame_info['image_id']} 추가 (점수: {frame_score})")
+            
+            # 관련도 점수순으로 정렬하고 상위 3개만 반환
+            relevant_frames.sort(key=lambda x: x['relevance_score'], reverse=True)
+            result = relevant_frames[:3]
+            print(f"🎯 최종 선택된 프레임 수: {len(result)}")
+            return result
+            
+        except Exception as e:
+            print(f"❌ 프레임 검색 실패: {e}")
+            return []
+
+class FrameImageView(APIView):
+    """프레임 이미지 서빙"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request, video_id, frame_number):
+        try:
+            from django.conf import settings
+            # 프레임 이미지 경로 생성
+            frame_filename = f"video{video_id}_frame{frame_number}.jpg"
+            frame_path = os.path.join(settings.MEDIA_ROOT, 'images', frame_filename)
+            
+            # 파일이 존재하는지 확인
+            if not os.path.exists(frame_path):
+                raise Http404("프레임 이미지를 찾을 수 없습니다")
+            
+            # 이미지 파일 읽기
+            with open(frame_path, 'rb') as f:
+                image_data = f.read()
+            
+            # HTTP 응답으로 이미지 반환
+            response = HttpResponse(image_data, content_type='image/jpeg')
+            response['Content-Disposition'] = f'inline; filename="{frame_filename}"'
+            return response
+            
+        except Exception as e:
+            return Response({
+                'error': f'프레임 이미지 로드 실패: {str(e)}'
+            }, status=status.HTTP_404_NOT_FOUND)

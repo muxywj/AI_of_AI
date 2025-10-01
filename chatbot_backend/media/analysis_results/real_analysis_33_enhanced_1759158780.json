@@ -1,0 +1,52 @@
+{
+  "success": true,
+  "video_summary": {
+    "total_detections": 10,
+    "unique_persons": 1,
+    "detailed_attribute_statistics": {
+      "object_type": {
+        "person": 5
+      }
+    },
+    "temporal_analysis": {
+      "peak_time_seconds": 0,
+      "peak_person_count": 5,
+      "average_person_count": 5.0,
+      "total_time_span": 3,
+      "activity_distribution": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      }
+    },
+    "scene_diversity": {
+      "scene_type_distribution": {
+        "simple": 5
+      },
+      "activity_level_distribution": {
+        "low": 5
+      },
+      "lighting_distribution": {
+        "dark": 5
+      },
+      "diversity_score": 0.2
+    },
+    "quality_assessment": {
+      "overall_score": 0.38,
+      "status": "fair",
+      "brightness_score": 0.471,
+      "contrast_score": 0.07,
+      "sharpness_score": 0.013,
+      "color_balance_score": 0.964,
+      "confidence_average": 0.38
+    },
+    "analysis_type": "enhanced_opencv_analysis",
+    "key_insights": [
+      "영상 품질이 보통입니다",
+      "주요 장면 유형: simple",
+      "주요 활동 수준: low",
+      "어두운 영상입니다"
+    ]
+  },
+  "frame_results": []
+}
