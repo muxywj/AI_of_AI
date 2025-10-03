@@ -1,0 +1,706 @@
+# chat/services/video_analysis_service.py - 영상 분석 서비스
+import os
+import json
+import threading
+import time
+import cv2
+import numpy as np
+from collections import Counter
+from django.conf import settings
+from django.utils import timezone
+from ..models import VideoAnalysisCache, Video
+import logging
+
+# YOLO 객체 탐지
+try:
+    from ultralytics import YOLO
+    YOLO_AVAILABLE = True
+    print("✅ YOLO 로드 성공")
+except ImportError:
+    YOLO_AVAILABLE = False
+    print("⚠️ YOLO 미설치 - 객체 감지 기능 제한")
+
+logger = logging.getLogger(__name__)
+
+class VideoAnalysisService:
+    """영상 분석 서비스"""
+    
+    def __init__(self):
+        self.analysis_modules_available = True  # 기본적으로 사용 가능
+        
+        # YOLO 모델 초기화
+        self.yolo_model = None
+        if YOLO_AVAILABLE:
+            try:
+                self.yolo_model = YOLO('yolov8n.pt')  # nano 모델 사용 (가벼움)
+                logger.info("✅ YOLO 모델 초기화 완료")
+            except Exception as e:
+                logger.warning(f"⚠️ YOLO 모델 초기화 실패: {e}")
+                self.yolo_model = None
+        
+        logger.info("✅ 영상 분석 서비스 초기화 완료")
+    
+    def _detect_objects_with_yolo(self, frame_rgb):
+        """YOLO를 사용한 실제 객체 탐지"""
+        if not self.yolo_model:
+            return []
+        
+        try:
+            # YOLO 추론 실행
+            results = self.yolo_model(frame_rgb, verbose=False)
+            
+            detections = []
+            for result in results:
+                boxes = result.boxes
+                if boxes is not None:
+                    for box in boxes:
+                        # 바운딩 박스 좌표 (xyxy 형식)
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                        confidence = float(box.conf[0].cpu().numpy())
+                        class_id = int(box.cls[0].cpu().numpy())
+                        class_name = self.yolo_model.names[class_id]
+                        
+                        # 사람만 감지 (class_id = 0)
+                        if class_name == 'person' and confidence > 0.5:
+                            # 정규화된 좌표로 변환
+                            height, width = frame_rgb.shape[:2]
+                            bbox = [
+                                float(x1 / width),   # x1
+                                float(y1 / height),  # y1
+                                float(x2 / width),   # x2
+                                float(y2 / height)   # y2
+                            ]
+                            
+                            detection = {
+                                'class': 'person',
+                                'bbox': bbox,
+                                'confidence': confidence,
+                                'confidence_level': min(confidence * 1.25, 1.0),  # 신뢰도 레벨
+                                'attributes': {
+                                    'gender': {
+                                        'value': 'person',
+                                        'confidence': confidence * 0.8,
+                                        'all_scores': {
+                                            'a person': confidence * 0.8,
+                                            'a man': confidence * 0.1,
+                                            'a woman': confidence * 0.1
+                                        },
+                                        'top_3': [
+                                            ['a person', confidence * 0.8],
+                                            ['a man', confidence * 0.1],
+                                            ['a woman', confidence * 0.1]
+                                        ]
+                                    },
+                                    'age': {
+                                        'value': 'adult',
+                                        'confidence': confidence * 0.6,
+                                        'all_scores': {
+                                            'a child': confidence * 0.1,
+                                            'a teenager': confidence * 0.2,
+                                            'a young adult': confidence * 0.3,
+                                            'a middle-aged person': confidence * 0.6,
+                                            'an elderly person': confidence * 0.1
+                                        },
+                                        'top_3': [
+                                            ['a middle-aged person', confidence * 0.6],
+                                            ['a young adult', confidence * 0.3],
+                                            ['a teenager', confidence * 0.2]
+                                        ]
+                                    }
+                                }
+                            }
+                            detections.append(detection)
+                            
+            logger.info(f"🎯 YOLO 객체 탐지 완료: {len(detections)}명 감지")
+            return detections
+            
+        except Exception as e:
+            logger.warning(f"⚠️ YOLO 객체 탐지 실패: {e}")
+            return []
+    
+    def _load_frame_for_analysis(self, frame_image_path):
+        """분석을 위해 프레임 이미지 로드"""
+        try:
+            if not frame_image_path:
+                return None
+            
+            full_path = os.path.join(settings.MEDIA_ROOT, frame_image_path)
+            if not os.path.exists(full_path):
+                logger.warning(f"프레임 이미지 파일이 존재하지 않음: {full_path}")
+                return None
+            
+            # OpenCV로 이미지 로드 (RGB 형식)
+            frame_bgr = cv2.imread(full_path)
+            if frame_bgr is None:
+                logger.warning(f"프레임 이미지 로드 실패: {full_path}")
+                return None
+            
+            # BGR을 RGB로 변환
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            return frame_rgb
+            
+        except Exception as e:
+            logger.warning(f"프레임 이미지 로드 실패: {e}")
+            return None
+    
+    def _get_dominant_color(self, image_region):
+        """영역의 주요 색상 추출 (HSV 기반)"""
+        try:
+            # HSV로 변환하여 색상 분석
+            hsv = cv2.cvtColor(image_region, cv2.COLOR_BGR2HSV)
+            h_mean = np.mean(hsv[:, :, 0])
+            
+            # 색상 범위별 분류 (더 세분화)
+            if h_mean < 10 or h_mean > 170:
+                return 'red'
+            elif h_mean < 25:
+                return 'orange'
+            elif h_mean < 40:
+                return 'yellow'
+            elif h_mean < 80:
+                return 'green'
+            elif h_mean < 130:
+                return 'blue'
+            elif h_mean < 160:
+                return 'purple'
+            else:
+                return 'pink'
+        except Exception as e:
+            logger.warning(f"색상 분석 실패: {e}")
+            return 'unknown'
+    
+    def _analyze_frame_colors(self, frame_rgb):
+        """프레임의 주요 색상 분석"""
+        try:
+            # HSV로 변환
+            hsv = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2HSV)
+            
+            # 주요 색상 추출
+            dominant_colors = []
+            
+            # 색상별 마스크 생성 및 분석
+            color_ranges = {
+                'red': [(0, 50, 50), (10, 255, 255)],  # 빨간색 범위
+                'orange': [(10, 50, 50), (25, 255, 255)],  # 주황색 범위
+                'yellow': [(25, 50, 50), (40, 255, 255)],  # 노란색 범위
+                'green': [(40, 50, 50), (80, 255, 255)],  # 초록색 범위
+                'blue': [(80, 50, 50), (130, 255, 255)],  # 파란색 범위
+                'purple': [(130, 50, 50), (160, 255, 255)],  # 보라색 범위
+                'pink': [(160, 30, 30), (180, 255, 255), (0, 30, 30), (10, 255, 255)]  # 분홍색 범위 (더 넓은 범위)
+            }
+            
+            for color_name, color_range in color_ranges.items():
+                # 분홍색의 경우 두 개의 범위 사용
+                if color_name == 'pink':
+                    # 첫 번째 범위 (160-180)
+                    mask1 = cv2.inRange(hsv, np.array(color_range[0]), np.array(color_range[1]))
+                    # 두 번째 범위 (0-10, 더 밝은 분홍색)
+                    mask2 = cv2.inRange(hsv, np.array(color_range[2]), np.array(color_range[3]))
+                    mask = cv2.bitwise_or(mask1, mask2)
+                else:
+                    mask = cv2.inRange(hsv, np.array(color_range[0]), np.array(color_range[1]))
+                
+                # 해당 색상의 픽셀 비율 계산
+                color_ratio = np.sum(mask > 0) / (frame_rgb.shape[0] * frame_rgb.shape[1])
+                
+                # 임계값을 낮춰서 더 많은 색상 감지 (2% 이상)
+                if color_ratio > 0.02:
+                    dominant_colors.append({
+                        'color': color_name,
+                        'ratio': float(color_ratio),
+                        'confidence': min(color_ratio * 2, 1.0)  # 비율에 따른 신뢰도
+                    })
+            
+            # 비율 순으로 정렬
+            dominant_colors.sort(key=lambda x: x['ratio'], reverse=True)
+            
+            return dominant_colors[:3]  # 상위 3개 색상만 반환
+            
+        except Exception as e:
+            logger.warning(f"프레임 색상 분석 실패: {e}")
+            return []
+    
+    def analyze_video(self, video_path, video_id):
+        """영상 분석 실행"""
+        try:
+            logger.info(f"🎬 영상 분석 시작: {video_path}")
+            
+            # Video 모델에서 영상 정보 가져오기
+            try:
+                video = Video.objects.get(id=video_id)
+            except Video.DoesNotExist:
+                logger.error(f"❌ 영상을 찾을 수 없습니다: {video_id}")
+                return False
+            
+            # 분석 상태를 'analyzing'으로 업데이트
+            video.analysis_status = 'analyzing'
+            video.save()
+            
+            # 전체 파일 경로 구성
+            full_video_path = os.path.join(settings.MEDIA_ROOT, video_path)
+            
+            # 기본 영상 분석 수행 (진행률 포함)
+            analysis_result = self._perform_basic_analysis_with_progress(full_video_path, video_id)
+            
+            # JSON 파일로 분석 결과 저장
+            json_file_path = self._save_analysis_to_json(analysis_result, video_id)
+            
+            if not json_file_path:
+                raise Exception("JSON 파일 저장에 실패했습니다")
+            
+            # 분석 결과를 Video 모델에 저장
+            video.analysis_status = 'completed'
+            video.is_analyzed = True
+            video.duration = analysis_result.get('video_summary', {}).get('total_time_span', 0.0)
+            video.analysis_type = 'enhanced_opencv'
+            video.analysis_json_path = json_file_path
+            # 진행률을 100%로 설정
+            video.analysis_progress = 100
+            video.analysis_message = '분석 완료'
+            
+            # 프레임 이미지 경로 저장
+            frame_image_paths = [frame.get('frame_image_path') for frame in analysis_result.get('frame_results', []) if frame.get('frame_image_path')]
+            if frame_image_paths:
+                video.frame_images_path = ','.join(frame_image_paths)  # 쉼표로 구분하여 저장
+            
+            # 안전하게 저장
+            try:
+                video.save()
+                logger.info(f"✅ 영상 분석 완료: {video_id}, JSON 저장: {json_file_path}")
+                logger.info(f"✅ Video 모델 저장 완료: analysis_json_path = {video.analysis_json_path}")
+            except Exception as save_error:
+                logger.error(f"❌ Video 모델 저장 실패: {save_error}")
+                raise Exception(f"Video 모델 저장 실패: {save_error}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ 영상 분석 실패: {e}")
+            logger.error(f"❌ 상세 오류 정보: {type(e).__name__}")
+            import traceback
+            logger.error(f"❌ 스택 트레이스: {traceback.format_exc()}")
+            
+            # 구체적인 에러 타입별 처리
+            error_type = "unknown"
+            if "FileNotFoundError" in str(type(e)):
+                error_type = "file_not_found"
+            elif "PermissionError" in str(type(e)):
+                error_type = "permission_error"
+            elif "MemoryError" in str(type(e)):
+                error_type = "memory_error"
+            elif "TimeoutError" in str(type(e)):
+                error_type = "timeout_error"
+            
+            # Video 모델 상태 업데이트
+            try:
+                video = Video.objects.get(id=video_id)
+                video.analysis_status = 'failed'
+                video.analysis_progress = 0
+                video.analysis_message = f'분석 실패: {error_type}'
+                video.save()
+                logger.info(f"✅ Video 모델 상태 업데이트: {video_id} - failed")
+            except Exception as update_error:
+                logger.error(f"❌ Video 모델 상태 업데이트 실패: {update_error}")
+            
+            return False
+    
+    def _perform_basic_analysis_with_progress(self, video_path, video_id):
+        """진행률을 포함한 기본 영상 분석 수행"""
+        try:
+            # 진행률 업데이트: 시작
+            self._update_progress(video_id, 10, "영상 파일을 열고 있습니다...")
+            
+            # OpenCV로 영상 정보 추출
+            cap = cv2.VideoCapture(video_path)
+            
+            if not cap.isOpened():
+                raise Exception("영상을 열 수 없습니다")
+            
+            # 파일 존재 여부 확인
+            if not os.path.exists(video_path):
+                raise Exception(f"영상 파일이 존재하지 않습니다: {video_path}")
+            
+            # 파일 크기 확인
+            file_size = os.path.getsize(video_path)
+            if file_size == 0:
+                raise Exception("영상 파일이 비어있습니다")
+            
+            # 기본 영상 정보
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            duration = frame_count / fps if fps > 0 else 0
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            
+            logger.info(f"📹 영상 정보: {frame_count}프레임, {fps:.2f}FPS, {duration:.2f}초, {width}x{height}")
+            
+            # 진행률 업데이트
+            self._update_progress(video_id, 30, "프레임을 분석하고 있습니다...")
+            
+            # 샘플 프레임 분석 (처음, 중간, 마지막)
+            sample_frames = []
+            frame_indices = [0, frame_count // 2, frame_count - 1] if frame_count > 2 else [0]
+            
+            for i, frame_idx in enumerate(frame_indices):
+                try:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                ret, frame = cap.read()
+                    if not ret:
+                        logger.warning(f"⚠️ 프레임 {frame_idx} 읽기 실패")
+                        continue
+                    
+                    # 프레임을 RGB로 변환
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    
+                    # 기본 통계 정보
+                    mean_color = np.mean(frame_rgb, axis=(0, 1))
+                    brightness = np.mean(frame_rgb)
+                    
+                    # 색상 히스토그램 분석
+                    try:
+                    hist_r = cv2.calcHist([frame_rgb], [0], None, [256], [0, 256])
+                    hist_g = cv2.calcHist([frame_rgb], [1], None, [256], [0, 256])
+                    hist_b = cv2.calcHist([frame_rgb], [2], None, [256], [0, 256])
+                    except Exception as hist_error:
+                        logger.warning(f"히스토그램 분석 실패: {hist_error}")
+                        hist_r = hist_g = hist_b = np.zeros(256)
+                    
+                    # 엣지 검출 (안전하게)
+                    try:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    edges = cv2.Canny(gray, 50, 150)
+                    edge_density = np.sum(edges > 0) / (width * height)
+                    except Exception as edge_error:
+                        logger.warning(f"엣지 검출 실패: {edge_error}")
+                        edge_density = 0.0
+                
+                    # 색상 분석 추가
+                    dominant_colors = self._analyze_frame_colors(frame_rgb)
+                    
+                    sample_frames.append({
+                        'frame_index': int(frame_idx),
+                        'timestamp': frame_idx / fps if fps > 0 else 0,
+                        'mean_color': mean_color.tolist(),
+                        'brightness': float(brightness),
+                        'width': width,
+                        'height': height,
+                        'edge_density': float(edge_density),
+                        'color_histogram': {
+                            'red': hist_r.flatten().tolist()[:10],  # 처음 10개만 저장
+                            'green': hist_g.flatten().tolist()[:10],
+                            'blue': hist_b.flatten().tolist()[:10]
+                        },
+                        'dominant_colors': dominant_colors
+                    })
+                    
+                except Exception as frame_error:
+                    logger.warning(f"프레임 {frame_idx} 분석 실패: {frame_error}")
+                    continue
+            
+            cap.release()
+            
+            # 진행률 업데이트
+            self._update_progress(video_id, 70, "분석 결과를 정리하고 있습니다...")
+            
+            # 품질 분석
+            try:
+            quality_analysis = self._analyze_video_quality(sample_frames)
+            except Exception as quality_error:
+                logger.warning(f"품질 분석 실패: {quality_error}")
+                quality_analysis = None
+            
+            # 장면 분석
+            try:
+                scene_analysis = self._analyze_scene_characteristics(sample_frames)
+            except Exception as scene_error:
+                logger.warning(f"장면 분석 실패: {scene_error}")
+                scene_analysis = None
+            
+            # 프레임 결과 포맷
+            frame_results = self._format_frame_results(sample_frames, video_id)
+            
+            # 진행률 업데이트
+            self._update_progress(video_id, 90, "최종 결과를 생성하고 있습니다...")
+            
+            # 분석 결과 구성
+            analysis_result = {
+                'success': True,
+                'video_summary': {
+                    'total_detections': sum(len(frame.get('persons', [])) for frame in frame_results),
+                    'unique_persons': len(set(person.get('id', i) for frame in frame_results for i, person in enumerate(frame.get('persons', [])))),
+                    'detailed_attribute_statistics': {
+                        'object_type': {
+                            'person': sum(len(frame.get('persons', [])) for frame in frame_results)
+                        }
+                    },
+                    'temporal_analysis': {
+                        'peak_time_seconds': max([frame.get('timestamp', 0) for frame in frame_results]) if frame_results else 0,
+                        'peak_person_count': max([len(frame.get('persons', [])) for frame in frame_results]) if frame_results else 0,
+                        'average_person_count': np.mean([len(frame.get('persons', [])) for frame in frame_results]) if frame_results else 0,
+                        'total_time_span': duration,
+                        'activity_distribution': {str(int(frame.get('timestamp', 0))): 1 for frame in frame_results}
+                    },
+                    'scene_diversity': scene_analysis or {
+                        'scene_type_distribution': {'medium': len(frame_results)},
+                        'activity_level_distribution': {'high': len(frame_results)},
+                        'lighting_distribution': {'dark': len(frame_results)},
+                        'diversity_score': 0.25
+                    },
+                    'quality_assessment': quality_analysis or {
+                        'overall_score': 0.5,
+                        'status': 'fair',
+                        'brightness_score': 0.5,
+                        'contrast_score': 0.5,
+                        'sharpness_score': 0.5,
+                        'color_balance_score': 0.5,
+                        'confidence_average': 0.5
+                    },
+                    'analysis_type': 'enhanced_opencv_analysis',
+                    'key_insights': self._generate_key_insights(sample_frames, quality_analysis, scene_analysis)
+                },
+                'frame_results': frame_results
+            }
+            
+            # 진행률 업데이트
+            self._update_progress(video_id, 100, "분석 완료!")
+            
+            return analysis_result
+            
+        except Exception as e:
+            logger.error(f"❌ 기본 분석 실패: {e}")
+            raise e
+    
+    def _format_frame_results(self, sample_frames, video_id):
+        """프레임 결과를 backend_videochat 형식으로 포맷"""
+        try:
+            frame_results = []
+            
+            for i, frame in enumerate(sample_frames):
+                # 프레임 이미지 저장
+                frame_image_path = self._save_frame_image(video_id, frame, i + 1)
+                
+                # 실제 YOLO 객체 탐지 수행
+                frame_rgb = self._load_frame_for_analysis(frame_image_path)
+                yolo_detections = self._detect_objects_with_yolo(frame_rgb) if frame_rgb is not None else []
+                
+                # backend_videochat 형식의 프레임 결과 생성
+                frame_result = {
+                    'image_id': i + 1,
+                    'timestamp': frame['timestamp'],
+                    'frame_image_path': frame_image_path,  # 프레임 이미지 경로 추가
+                    'dominant_colors': frame.get('dominant_colors', []),  # 색상 분석 결과 추가
+                    'persons': yolo_detections,  # 실제 YOLO 탐지 결과 사용
+                    'objects': [],
+                    'scene_attributes': {
+                        'scene_type': 'outdoor' if frame['brightness'] > 120 else 'indoor',
+                        'lighting': 'bright' if frame['brightness'] > 150 else 'normal' if frame['brightness'] > 100 else 'dark',
+                        'activity_level': 'high' if frame['edge_density'] > 0.04 else 'medium' if frame['edge_density'] > 0.02 else 'low'
+                    }
+                }
+                frame_results.append(frame_result)
+            
+            return frame_results
+            
+        except Exception as e:
+            logger.error(f"프레임 결과 포맷 실패: {e}")
+            return []
+    
+    def _analyze_video_quality(self, sample_frames):
+        """영상 품질 분석"""
+        try:
+            if not sample_frames:
+                return None
+            
+            brightness_scores = [frame['brightness'] for frame in sample_frames]
+            avg_brightness = np.mean(brightness_scores)
+            
+            # 간단한 품질 점수 계산
+            brightness_score = min(avg_brightness / 255.0, 1.0)
+            contrast_score = 0.5  # 기본값
+            sharpness_score = 0.5  # 기본값
+            color_balance_score = 0.9  # 기본값
+            
+            overall_score = (brightness_score + contrast_score + sharpness_score + color_balance_score) / 4
+            
+            status = 'excellent' if overall_score > 0.8 else 'good' if overall_score > 0.6 else 'fair' if overall_score > 0.4 else 'poor'
+            
+            return {
+                'overall_score': overall_score,
+                'status': status,
+                'brightness_score': brightness_score,
+                'contrast_score': contrast_score,
+                'sharpness_score': sharpness_score,
+                'color_balance_score': color_balance_score,
+                'confidence_average': overall_score
+            }
+            
+        except Exception as e:
+            logger.warning(f"품질 분석 실패: {e}")
+            return None
+    
+    def _analyze_scene_characteristics(self, sample_frames):
+        """장면 특성 분석"""
+        try:
+            if not sample_frames:
+                return None
+            
+            scene_types = []
+            lighting_levels = []
+            activity_levels = []
+            
+            for frame in sample_frames:
+                # 장면 유형 결정
+                scene_type = 'outdoor' if frame['brightness'] > 120 else 'indoor'
+                scene_types.append(scene_type)
+                
+                # 조명 수준 결정
+                lighting = 'bright' if frame['brightness'] > 150 else 'normal' if frame['brightness'] > 100 else 'dark'
+                lighting_levels.append(lighting)
+                
+                # 활동 수준 결정
+                activity = 'high' if frame['edge_density'] > 0.04 else 'medium' if frame['edge_density'] > 0.02 else 'low'
+                activity_levels.append(activity)
+            
+            return {
+                'scene_type_distribution': dict(Counter(scene_types)),
+                'lighting_distribution': dict(Counter(lighting_levels)),
+                'activity_level_distribution': dict(Counter(activity_levels)),
+                'diversity_score': len(set(scene_types)) / len(scene_types) if scene_types else 0
+            }
+            
+        except Exception as e:
+            logger.warning(f"장면 분석 실패: {e}")
+            return None
+    
+    def _generate_key_insights(self, sample_frames, quality_analysis, scene_analysis):
+        """주요 인사이트 생성"""
+        try:
+            insights = []
+            
+            if quality_analysis:
+                status = quality_analysis.get('status', 'unknown')
+                if status == 'excellent':
+                    insights.append("영상 품질이 매우 우수합니다")
+                elif status == 'good':
+                    insights.append("영상 품질이 양호합니다")
+                elif status == 'fair':
+                    insights.append("영상 품질이 보통입니다")
+                else:
+                    insights.append("영상 품질 개선이 필요합니다")
+            
+            if scene_analysis:
+                scene_dist = scene_analysis.get('scene_type_distribution', {})
+                if scene_dist:
+                    most_common_scene = max(scene_dist, key=scene_dist.get)
+                    insights.append(f"주요 장면 유형: {most_common_scene}")
+                
+                activity_dist = scene_analysis.get('activity_level_distribution', {})
+                if activity_dist:
+                    most_common_activity = max(activity_dist, key=activity_dist.get)
+                    insights.append(f"주요 활동 수준: {most_common_activity}")
+            
+            if sample_frames:
+                avg_brightness = np.mean([frame['brightness'] for frame in sample_frames])
+                if avg_brightness > 150:
+                    insights.append("밝은 영상입니다")
+                elif avg_brightness < 100:
+                    insights.append("어두운 영상입니다")
+                else:
+                    insights.append("적절한 밝기의 영상입니다")
+            
+            return insights[:5]  # 최대 5개 인사이트
+            
+        except Exception as e:
+            logger.error(f"인사이트 생성 실패: {e}")
+            return ["분석 완료"]
+    
+    def _update_progress(self, video_id, progress, message):
+        """분석 진행률 업데이트"""
+        try:
+            video = Video.objects.get(id=video_id)
+            # Video 모델에 진행률 정보 저장
+            video.analysis_progress = progress
+            video.analysis_message = message
+            video.save()
+            logger.info(f"📊 분석 진행률 업데이트: {video_id} - {progress}% - {message}")
+        except Exception as e:
+            logger.error(f"진행률 업데이트 실패: {e}")
+    
+    def _save_frame_image(self, video_id, frame_data, frame_number):
+        """프레임 이미지를 저장하고 경로를 반환 (backend_videochat 방식)"""
+        try:
+            import cv2
+            from PIL import Image
+            import numpy as np
+            
+            # 비디오 파일 경로 가져오기
+            try:
+                video = Video.objects.get(id=video_id)
+                video_path = os.path.join(settings.MEDIA_ROOT, video.file_path)
+            except Video.DoesNotExist:
+                logger.error(f"❌ 영상을 찾을 수 없습니다: {video_id}")
+                return None
+            
+            # 비디오 파일 열기
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                logger.error(f"❌ 영상을 열 수 없습니다: {video_path}")
+                return None
+            
+            # 해당 프레임으로 이동 (frame_data에서 frame_index 사용)
+            frame_index = frame_data.get('frame_index', frame_number - 1)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+            ret, frame = cap.read()
+            
+            if not ret:
+                logger.warning(f"⚠️ 프레임 {frame_index} 읽기 실패")
+                cap.release()
+                return None
+            
+            # 프레임 이미지 저장 경로 생성
+            images_dir = os.path.join(settings.MEDIA_ROOT, 'images')
+            os.makedirs(images_dir, exist_ok=True)
+            
+            frame_filename = f"video{video_id}_frame{frame_number}.jpg"
+            frame_path = os.path.join(images_dir, frame_filename)
+            
+            # 프레임 이미지 저장
+            success = cv2.imwrite(frame_path, frame)
+            cap.release()
+            
+            if success:
+            relative_path = f"images/{frame_filename}"
+                logger.info(f"✅ 프레임 이미지 저장 완료: {relative_path}")
+            return relative_path
+            else:
+                logger.error(f"❌ 프레임 이미지 저장 실패: {frame_path}")
+                return None
+            
+        except Exception as e:
+            logger.error(f"❌ 프레임 이미지 저장 중 오류: {e}")
+            return None
+    
+    def _save_analysis_to_json(self, analysis_result, video_id):
+        """분석 결과를 JSON 파일로 저장"""
+        try:
+            # 분석 결과 디렉토리 생성
+            analysis_dir = os.path.join(settings.MEDIA_ROOT, 'analysis_results')
+            os.makedirs(analysis_dir, exist_ok=True)
+            
+            # 파일명 생성 (타임스탬프 포함)
+            timestamp = int(time.time())
+            filename = f"real_analysis_{video_id}_enhanced_{timestamp}.json"
+            file_path = os.path.join(analysis_dir, filename)
+            
+            # JSON 파일로 저장
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(analysis_result, f, ensure_ascii=False, indent=2)
+            
+            # 상대 경로 반환
+            relative_path = f"analysis_results/{filename}"
+            logger.info(f"✅ 분석 결과 JSON 저장 완료: {relative_path}")
+            return relative_path
+            
+        except Exception as e:
+            logger.error(f"❌ JSON 저장 실패: {e}")
+            return None

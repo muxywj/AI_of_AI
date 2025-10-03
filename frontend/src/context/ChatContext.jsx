@@ -1,5 +1,6 @@
 // context/ChatContext.jsx
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { api } from '../utils/api';
 
 const ChatContext = createContext();
 
@@ -7,6 +8,8 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
   const [selectedModels, setSelectedModels] = useState(initialModels);
   const [messages, setMessages] = useState({});
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingModels, setLoadingModels] = useState(new Set());
+  const [loadingProgress, setLoadingProgress] = useState({});
 
   // initialModels가 변경되면 selectedModels 업데이트
   useEffect(() => {
@@ -21,8 +24,33 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
     const imagesBase64 = options.imagesBase64 || [];
     const hasFiles = filesBase64.length > 0 || imagesBase64.length > 0;
     
-    if (!messageText.trim() && !hasFiles) return;
-    if (!selectedModels || selectedModels.length === 0) return;
+    // 입력 유효성 검사
+    if (!messageText?.trim() && !hasFiles) {
+      console.warn('메시지나 파일이 없습니다.');
+      return;
+    }
+    
+    if (!selectedModels || selectedModels.length === 0) {
+      console.warn('선택된 모델이 없습니다.');
+      return;
+    }
+    
+    // 메시지 길이 제한 (너무 긴 메시지 방지)
+    if (messageText && messageText.length > 10000) {
+      console.warn('메시지가 너무 깁니다. 10,000자 이하로 입력해주세요.');
+      return;
+    }
+    
+    // 파일 크기 제한 (10MB)
+    const maxFileSize = 10 * 1024 * 1024; // 10MB
+    const oversizedFiles = [...filesBase64, ...imagesBase64].filter(file => 
+      file.size && file.size > maxFileSize
+    );
+    
+    if (oversizedFiles.length > 0) {
+      console.warn(`파일 크기가 너무 큽니다. 10MB 이하의 파일을 업로드해주세요.`);
+      return;
+    }
 
     // 파일명들을 추출
     const fileNames = [
@@ -58,6 +86,8 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
 
     // 로딩 상태 시작
     setIsLoading(true);
+    setLoadingModels(new Set(modelsToUpdate));
+    setLoadingProgress({});
 
     // 각 모델별로 AI 응답 처리
     try {
@@ -66,8 +96,13 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
       const otherResponses = {};
       
              // 다른 모델들의 응답 수집
-             const otherResponsePromises = otherModels.map(async (modelId) => {
+             const otherResponsePromises = otherModels.map(async (modelId, index) => {
                try {
+                 // 로딩 진행률 업데이트
+                 setLoadingProgress(prev => ({
+                   ...prev,
+                   [modelId]: { status: 'processing', progress: 0 }
+                 }));
                  const formData = new FormData();
                  formData.append('message', messageText || '');
                  
@@ -88,17 +123,20 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
                    }
                  }
 
-                 const response = await fetch(`http://localhost:8000/chat/${modelId}/`, {
-            method: 'POST',
-            body: formData
-          });
+                 const response = await api.post(`/chat/${modelId}/`, formData, {
+                   headers: {
+                     'Content-Type': 'multipart/form-data',
+                   },
+                 });
 
-          if (!response.ok) {
-            throw new Error('API 호출 실패');
-          }
-
-          const data = await response.json();
+          const data = response.data;
           const aiResponse = data.response || "응답을 받았습니다.";
+          
+          // 로딩 완료 상태 업데이트
+          setLoadingProgress(prev => ({
+            ...prev,
+            [modelId]: { status: 'completed', progress: 100 }
+          }));
           
           // 응답 저장
           otherResponses[modelId] = aiResponse;
@@ -123,12 +161,41 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
           return aiResponse;
 
         } catch (error) {
-          // 에러 메시지 추가
+          // 구체적인 에러 메시지 생성
+          let errorText = `죄송합니다. ${modelId.toUpperCase()} 모델에서 오류가 발생했습니다.`;
+          
+          if (error.response) {
+            // 서버 응답이 있는 경우
+            const status = error.response.status;
+            if (status === 401) {
+              errorText = `${modelId.toUpperCase()} API 키가 유효하지 않습니다. 설정을 확인해주세요.`;
+            } else if (status === 429) {
+              errorText = `${modelId.toUpperCase()} API 사용량 한도를 초과했습니다. 잠시 후 다시 시도해주세요.`;
+            } else if (status >= 500) {
+              errorText = `${modelId.toUpperCase()} 서버에 일시적인 문제가 발생했습니다. 잠시 후 다시 시도해주세요.`;
+            } else {
+              errorText = `${modelId.toUpperCase()} 모델에서 오류가 발생했습니다. (오류 코드: ${status})`;
+            }
+          } else if (error.request) {
+            // 네트워크 오류
+            errorText = `${modelId.toUpperCase()} 모델에 연결할 수 없습니다. 인터넷 연결을 확인해주세요.`;
+          } else {
+            // 기타 오류
+            errorText = `${modelId.toUpperCase()} 모델 처리 중 예상치 못한 오류가 발생했습니다.`;
+          }
+          
+          // 로딩 실패 상태 업데이트
+          setLoadingProgress(prev => ({
+            ...prev,
+            [modelId]: { status: 'error', progress: 0, error: errorText }
+          }));
+          
           const errorMessage = {
-            text: `죄송합니다. ${modelId.toUpperCase()} 모델에서 오류가 발생했습니다. API 연결을 확인해주세요.`,
+            text: errorText,
             isUser: false,
             timestamp: new Date().toISOString(),
-            id: Date.now() + Math.random() + modelId + "_error"
+            id: Date.now() + Math.random() + modelId + "_error",
+            isError: true
           };
 
           setMessages(prevMessages => {
@@ -253,16 +320,13 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
                    }
                  }
 
-                 const response = await fetch(`http://localhost:8000/chat/optimal/`, {
-            method: 'POST',
-            body: formData
-          });
+                 const response = await api.post(`/chat/optimal/`, formData, {
+                   headers: {
+                     'Content-Type': 'multipart/form-data',
+                   },
+                 });
 
-          if (!response.ok) {
-            throw new Error('API 호출 실패');
-          }
-
-          const data = await response.json();
+          const data = response.data;
           
           // optimal 응답 추가 (유사도 분석 데이터 포함)
           setMessages(prevMessages => {
@@ -293,12 +357,32 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
           });
 
         } catch (error) {
-          // 에러 메시지 추가
+          // 구체적인 에러 메시지 생성
+          let errorText = `죄송합니다. OPTIMAL 모델에서 오류가 발생했습니다.`;
+          
+          if (error.response) {
+            const status = error.response.status;
+            if (status === 401) {
+              errorText = `OPTIMAL 모델 API 키가 유효하지 않습니다. 설정을 확인해주세요.`;
+            } else if (status === 429) {
+              errorText = `OPTIMAL 모델 API 사용량 한도를 초과했습니다. 잠시 후 다시 시도해주세요.`;
+            } else if (status >= 500) {
+              errorText = `OPTIMAL 모델 서버에 일시적인 문제가 발생했습니다. 잠시 후 다시 시도해주세요.`;
+            } else {
+              errorText = `OPTIMAL 모델에서 오류가 발생했습니다. (오류 코드: ${status})`;
+            }
+          } else if (error.request) {
+            errorText = `OPTIMAL 모델에 연결할 수 없습니다. 인터넷 연결을 확인해주세요.`;
+          } else {
+            errorText = `OPTIMAL 모델 처리 중 예상치 못한 오류가 발생했습니다.`;
+          }
+          
           const errorMessage = {
-            text: `죄송합니다. OPTIMAL 모델에서 오류가 발생했습니다. API 연결을 확인해주세요.`,
+            text: errorText,
             isUser: false,
             timestamp: new Date().toISOString(),
-            id: Date.now() + Math.random() + 'optimal_error'
+            id: Date.now() + Math.random() + 'optimal_error',
+            isError: true
           };
 
           setMessages(prevMessages => {
@@ -317,6 +401,8 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
     } finally {
       // 로딩 상태 종료
       setIsLoading(false);
+      setLoadingModels(new Set());
+      // 진행률은 유지 (사용자가 확인할 수 있도록)
     }
   };
 
@@ -327,6 +413,8 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
       messages,
       setMessages,
       isLoading,
+      loadingModels,
+      loadingProgress,
       sendMessage
     }}>
       {children}

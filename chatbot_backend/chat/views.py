@@ -928,7 +928,20 @@ class VideoUploadView(APIView):
             # 파일 확장자 검증 (backend_videochat 방식)
             if not video_file.name.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')):
                 return Response({
-                    'error': '지원하지 않는 파일 형식입니다'
+                    'error': '지원하지 않는 파일 형식입니다. MP4, AVI, MOV, MKV, WEBM 형식만 지원됩니다.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 파일 크기 검증 (50MB 제한)
+            max_size = 50 * 1024 * 1024  # 50MB
+            if video_file.size > max_size:
+                return Response({
+                    'error': f'파일 크기가 너무 큽니다. 최대 50MB까지 업로드 가능합니다. (현재: {video_file.size / (1024*1024):.1f}MB)'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 파일명 길이 검증
+            if len(video_file.name) > 200:
+                return Response({
+                    'error': '파일명이 너무 깁니다. 200자 이하로 제한됩니다.'
                 }, status=status.HTTP_400_BAD_REQUEST)
             
             # 고유한 파일명 생성 (backend_videochat 방식)
@@ -942,6 +955,19 @@ class VideoUploadView(APIView):
                 ContentFile(video_file.read())
             )
             full_path = os.path.join(settings.MEDIA_ROOT, file_path)
+            
+            # 파일 저장 검증
+            if not os.path.exists(full_path):
+                return Response({
+                    'error': '파일 저장에 실패했습니다. 다시 시도해주세요.'
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            # 파일 크기 재검증 (실제 저장된 파일)
+            actual_size = os.path.getsize(full_path)
+            if actual_size == 0:
+                return Response({
+                    'error': '빈 파일이 업로드되었습니다. 유효한 영상 파일을 선택해주세요.'
+                }, status=status.HTTP_400_BAD_REQUEST)
             
             # Create Video model instance (backend_videochat 방식)
             video = Video.objects.create(
@@ -957,20 +983,36 @@ class VideoUploadView(APIView):
             def analyze_video_background():
                 try:
                     print(f"🎬 백그라운드 영상 분석 시작: {video.id}")
-                    analysis_result = video_analysis_service.analyze_video(file_path, video.id)
-                    if analysis_result:
-                        print(f"✅ 영상 분석 완료: {video.id}")
-                        # Video 모델 업데이트
-                        video.analysis_status = 'completed'
-                        video.is_analyzed = True
+                    
+                    # 파일 존재 여부 재확인
+                    if not os.path.exists(full_path):
+                        print(f"❌ 영상 파일이 존재하지 않음: {full_path}")
+                        video.analysis_status = 'failed'
+                        video.analysis_message = '영상 파일을 찾을 수 없습니다.'
                         video.save()
+                        return
+                    
+                    analysis_result = video_analysis_service.analyze_video(file_path, video.id)
+                    if analysis_result and analysis_result is not True:
+                        # 분석 결과가 딕셔너리인 경우 (오류 정보 포함)
+                        if isinstance(analysis_result, dict) and not analysis_result.get('success', True):
+                            print(f"❌ 영상 분석 실패: {video.id} - {analysis_result.get('error_message', 'Unknown error')}")
+                            video.analysis_status = 'failed'
+                            video.analysis_message = analysis_result.get('error_message', '분석 중 오류가 발생했습니다.')
+                        else:
+                            print(f"✅ 영상 분석 완료: {video.id}")
+                            video.analysis_status = 'completed'
+                            video.is_analyzed = True
                     else:
                         print(f"❌ 영상 분석 실패: {video.id}")
                         video.analysis_status = 'failed'
-                        video.save()
+                        video.analysis_message = '분석 중 오류가 발생했습니다.'
+                    
+                    video.save()
                 except Exception as e:
                     print(f"❌ 백그라운드 분석 오류: {e}")
                     video.analysis_status = 'failed'
+                    video.analysis_message = f'분석 중 오류가 발생했습니다: {str(e)}'
                     video.save()
             
             # 별도 스레드에서 분석 실행
@@ -1000,13 +1042,19 @@ class VideoListView(APIView):
             video_list = []
             
             for video in videos:
+                # 분석 상태 결정 (더 정확한 판단)
+                actual_analysis_status = video.analysis_status
+                if video.analysis_status == 'completed' and not video.analysis_json_path:
+                    actual_analysis_status = 'failed'
+                    print(f"⚠️ 영상 {video.id}: analysis_status는 completed이지만 analysis_json_path가 없음")
+                
                 video_data = {
                     'id': video.id,
                     'filename': video.filename,
                     'original_name': video.original_name,
                     'duration': video.duration,
                     'is_analyzed': video.is_analyzed,
-                    'analysis_status': video.analysis_status,
+                    'analysis_status': actual_analysis_status,  # 실제 상태 사용
                     'uploaded_at': video.uploaded_at,
                     'file_size': video.file_size
                 }
@@ -1036,11 +1084,17 @@ class VideoAnalysisView(APIView):
                 'analysis_message': video.analysis_message or ''
             }
             
+            # 분석 상태 결정 (더 정확한 판단)
+            actual_analysis_status = video.analysis_status
+            if video.analysis_status == 'completed' and not video.analysis_json_path:
+                actual_analysis_status = 'failed'
+                print(f"⚠️ 영상 {video_id}: analysis_status는 completed이지만 analysis_json_path가 없음")
+            
             return Response({
                 'video_id': video.id,
                 'filename': video.filename,
                 'original_name': video.original_name,
-                'analysis_status': video.analysis_status,
+                'analysis_status': actual_analysis_status,  # 실제 상태 사용
                 'is_analyzed': video.is_analyzed,
                 'duration': video.duration,
                 'uploaded_at': video.uploaded_at,
@@ -1281,8 +1335,16 @@ class VideoChatView(APIView):
             print(f"🔍 검색된 프레임 수: {len(relevant_frames)}")
             if relevant_frames:
                 print(f"📸 첫 번째 프레임: {relevant_frames[0]}")
+                print(f"📸 모든 프레임 정보:")
+                for i, frame in enumerate(relevant_frames):
+                    print(f"  프레임 {i+1}: {frame}")
             else:
                 print("❌ 검색된 프레임이 없습니다!")
+                print(f"❌ analysis_json_data keys: {list(analysis_json_data.keys()) if analysis_json_data else 'None'}")
+                if analysis_json_data and 'frame_results' in analysis_json_data:
+                    print(f"❌ frame_results 개수: {len(analysis_json_data['frame_results'])}")
+                    if analysis_json_data['frame_results']:
+                        print(f"❌ 첫 번째 frame_result: {analysis_json_data['frame_results'][0]}")
             
             # 다중 AI 응답 생성
             ai_responses = {}
@@ -1344,6 +1406,9 @@ class VideoChatView(APIView):
                         continue  # optimal은 나중에 처리
                     
                     try:
+                        # 색상 검색 모드 확인
+                        is_color_search = any(keyword in message.lower() for keyword in ['빨간색', '파란색', '노란색', '초록색', '보라색', '분홍색', '검은색', '흰색', '회색', '주황색', '갈색', '옷'])
+                        
                         # 영상 정보와 프레임 정보를 포함한 프롬프트 생성
                         video_context = f"""
 영상 정보:
@@ -1353,25 +1418,110 @@ class VideoChatView(APIView):
 - 상태: {analysis_data.get('analysis_status', 'Unknown')}
 """
                         
-                        # 관련 프레임 정보 추가
+                        # 관련 프레임 정보 추가 (색상 검색 모드에 따라 다르게 처리)
                         frame_context = ""
                         if relevant_frames:
-                            frame_context = "\n\n관련 프레임 정보:\n"
-                            for i, frame in enumerate(relevant_frames, 1):
-                                frame_context += f"프레임 {i}: 시간 {frame['timestamp']:.1f}초, 관련도 {frame['relevance_score']}점\n"
-                                if frame['persons']:
-                                    frame_context += f"  - 사람 {len(frame['persons'])}명 감지\n"
-                                if frame['objects']:
-                                    frame_context += f"  - 객체 {len(frame['objects'])}개 감지\n"
-                                scene_attrs = frame.get('scene_attributes', {})
-                                if scene_attrs:
-                                    frame_context += f"  - 장면: {scene_attrs.get('scene_type', 'unknown')}, 조명: {scene_attrs.get('lighting', 'unknown')}\n"
+                            if is_color_search:
+                                frame_context = "\n\n관련 프레임 정보 (색상 분석 필요):\n"
+                                frame_context += "⚠️ 중요: 현재 분석 결과에는 색상 정보가 포함되어 있지 않습니다.\n"
+                                frame_context += "하지만 실제 프레임 이미지들을 통해 색상을 직접 확인할 수 있습니다.\n\n"
+                                
+                                for i, frame in enumerate(relevant_frames, 1):
+                                    frame_context += f"프레임 {i}: 시간 {frame['timestamp']:.1f}초\n"
+                                    frame_context += f"  - 이미지 URL: {frame['image_url']}\n"
+                                    frame_context += f"  - 실제 파일 경로: {frame.get('actual_image_path', 'N/A')}\n"
+                                    
+                                    # 색상 분석 결과 추가
+                                    dominant_colors = frame.get('dominant_colors', [])
+                                    if dominant_colors:
+                                        frame_context += f"  - 색상 분석 결과: {dominant_colors}\n"
+                                        color_match = frame.get('color_search_info', {}).get('color_match_found', False)
+                                        frame_context += f"  - 색상 매칭: {'✅ 발견' if color_match else '❌ 없음'}\n"
+                                    else:
+                                        frame_context += f"  - 색상 분석 결과: 없음\n"
+                                    
+                                    # 실제 이미지 파일을 base64로 인코딩하여 포함
+                                    actual_image_path = frame.get('actual_image_path')
+                                    if actual_image_path and os.path.exists(actual_image_path):
+                                        try:
+                                            import base64
+                                            with open(actual_image_path, 'rb') as img_file:
+                                                img_data = img_file.read()
+                                                img_base64 = base64.b64encode(img_data).decode('utf-8')
+                                                # 이미지 크기가 너무 크면 URL만 제공
+                                                if len(img_base64) > 100000:  # 100KB 제한
+                                                    frame_context += f"  - 이미지 URL (직접 확인 필요): {frame['image_url']}\n"
+                                                    print(f"⚠️ 프레임 {i} 이미지가 너무 커서 URL만 제공 (크기: {len(img_base64)} 문자)")
+                                                else:
+                                                    frame_context += f"  - 실제 이미지 (base64): data:image/jpeg;base64,{img_base64}\n"
+                                                    print(f"✅ 프레임 {i} 이미지 base64 인코딩 완료 (크기: {len(img_base64)} 문자)")
+                                        except Exception as e:
+                                            frame_context += f"  - 이미지 로드 실패: {str(e)}\n"
+                                            print(f"❌ 프레임 {i} 이미지 로드 실패: {str(e)}")
+                                    
+                                    if frame['persons']:
+                                        frame_context += f"  - 사람 {len(frame['persons'])}명 감지됨!\n"
+                                        for j, person in enumerate(frame['persons'], 1):
+                                            confidence = person.get('confidence', 0)
+                                            bbox = person.get('bbox', [])
+                                            frame_context += f"    사람 {j}: 신뢰도 {confidence:.2f}, 위치 {bbox}\n"
+                                    frame_context += "\n"
+                                
+                                frame_context += "💡 각 프레임 이미지를 직접 확인하여 요청하신 색상의 옷을 입은 사람이 있는지 분석해주세요.\n"
+                                frame_context += f"🔗 이미지 접근 방법: 각 프레임의 이미지 URL을 브라우저에서 열어서 직접 확인할 수 있습니다.\n"
+                                frame_context += f"📋 분석 요청: 위 이미지들을 보고 '{message}'에서 요청한 색상의 옷을 입은 사람이 있는지 정확히 분석해주세요.\n"
+                                frame_context += f"🎨 색상 분석 결과: 위에서 제공된 색상 분석 결과를 참고하여 요청된 색상과 일치하는지 확인해주세요.\n"
+                            else:
+                                frame_context = "\n\n관련 프레임 정보 (사람 감지됨):\n"
+                                for i, frame in enumerate(relevant_frames, 1):
+                                    frame_context += f"프레임 {i}: 시간 {frame['timestamp']:.1f}초, 관련도 {frame['relevance_score']}점\n"
+                                    if frame['persons']:
+                                        frame_context += f"  - 사람 {len(frame['persons'])}명 감지됨!\n"
+                                        # 각 사람의 상세 정보 추가
+                                        for j, person in enumerate(frame['persons'], 1):
+                                            confidence = person.get('confidence', 0)
+                                            bbox = person.get('bbox', [])
+                                            frame_context += f"    사람 {j}: 신뢰도 {confidence:.2f}, 위치 {bbox}\n"
+                                            # 속성 정보 추가
+                                            attrs = person.get('attributes', {})
+                                            if 'gender' in attrs:
+                                                gender_info = attrs['gender']
+                                                frame_context += f"      성별: {gender_info.get('value', 'unknown')} (신뢰도: {gender_info.get('confidence', 0):.2f})\n"
+                                            if 'age' in attrs:
+                                                age_info = attrs['age']
+                                                frame_context += f"      나이: {age_info.get('value', 'unknown')} (신뢰도: {age_info.get('confidence', 0):.2f})\n"
+                                    if frame['objects']:
+                                        frame_context += f"  - 객체 {len(frame['objects'])}개 감지\n"
+                                    scene_attrs = frame.get('scene_attributes', {})
+                                    if scene_attrs:
+                                        frame_context += f"  - 장면: {scene_attrs.get('scene_type', 'unknown')}, 조명: {scene_attrs.get('lighting', 'unknown')}\n"
+                                    frame_context += "\n"
+                        else:
+                            frame_context = "\n\n관련 프레임 정보: 사람이 감지된 프레임이 없습니다.\n"
                         
                         enhanced_message = f"""{video_context}{frame_context}
 
-사용자 질문: {message}
+사용자 질문: "{message}"
 
-위 영상과 관련 프레임 정보를 참고하여 답변해주세요."""
+위 영상 분석 정보를 바탕으로 사용자의 질문에 정확하고 도움이 되는 답변을 제공해주세요.
+
+답변 시 다음을 포함해주세요:
+1. 질문에 대한 직접적인 답변
+2. 관련 프레임의 구체적인 정보 (시간, 내용 등)
+3. 영상에서 관찰할 수 있는 세부사항
+4. 추가로 확인할 수 있는 다른 요소들
+
+답변은 한국어로 작성하고, 구체적이고 실용적인 정보를 제공해주세요.
+
+중요: 위 프레임 정보에서 사람이 감지되었다면, 반드시 그 사실을 명확히 언급하고 구체적인 정보를 제공해주세요. 사람이 감지되지 않았다면 그 사실도 명확히 말해주세요.
+
+"🎨 색상 검색 모드: 위에서 제공된 프레임 이미지들을 직접 확인하여 요청하신 색상의 옷을 입은 사람이 있는지 분석해주세요. 각 프레임의 실제 이미지(base64)를 직접 보고 색상을 분석해주세요.
+
+⚠️ 중요: 현재 분석 시스템은 색상 정보를 제공하지 않으므로, 반드시 실제 이미지를 직접 확인하여 색상을 분석해야 합니다. 분석 결과에 색상 정보가 없다고 해서 해당 색상의 옷을 입은 사람이 없다고 결론내리지 마세요. 실제 이미지를 보고 정확한 색상을 분석해주세요.
+
+🎯 특별 지시: 각 프레임 이미지에서 실제로 보이는 색상을 정확히 분석하고, 요청된 색상과 일치하는지 판단해주세요. 배경에 있는 사람들도 놓치지 말고 확인해주세요. 
+
+📸 이미지 분석: 위에 제공된 base64 이미지들을 직접 보고, 분홍색 옷을 입은 사람이 있는지 정확히 분석해주세요." if is_color_search else """""
                         
                         # 기본 채팅 시스템과 동일한 방식으로 응답 생성
                         ai_response = chatbot.chat(enhanced_message)
@@ -1398,11 +1548,37 @@ class VideoChatView(APIView):
                     # 기본 채팅 시스템의 generate_optimal_response 사용
                     optimal_response = generate_optimal_response(ai_responses, message, os.getenv('OPENAI_API_KEY'))
                     
-                    # 프레임 정보 추가
+                    # 프레임 정보 추가 (더 자세한 정보 포함)
                     if relevant_frames:
                         frame_summary = f"\n\n📸 관련 프레임 {len(relevant_frames)}개 발견:\n"
                         for i, frame in enumerate(relevant_frames, 1):
-                            frame_summary += f"• 프레임 {i}: {frame['timestamp']:.1f}초 (관련도 {frame['relevance_score']}점)\n"
+                            frame_summary += f"• 프레임 {i}: {frame['timestamp']:.1f}초 (관련도 {frame['relevance_score']:.2f}점)\n"
+                            
+                            # 프레임별 세부 정보 추가
+                            if frame.get('persons'):
+                                frame_summary += f"  👤 사람 {len(frame['persons'])}명 감지됨!\n"
+                                # 각 사람의 상세 정보 추가
+                                for j, person in enumerate(frame['persons'], 1):
+                                    confidence = person.get('confidence', 0)
+                                    frame_summary += f"    사람 {j}: 신뢰도 {confidence:.2f}\n"
+                                    # 속성 정보 추가
+                                    attrs = person.get('attributes', {})
+                                    if 'gender' in attrs:
+                                        gender_info = attrs['gender']
+                                        frame_summary += f"      성별: {gender_info.get('value', 'unknown')}\n"
+                                    if 'age' in attrs:
+                                        age_info = attrs['age']
+                                        frame_summary += f"      나이: {age_info.get('value', 'unknown')}\n"
+                            if frame.get('objects'):
+                                frame_summary += f"  📦 객체 {len(frame['objects'])}개 감지\n"
+                            
+                            scene_attrs = frame.get('scene_attributes', {})
+                            if scene_attrs:
+                                scene_type = scene_attrs.get('scene_type', 'unknown')
+                                lighting = scene_attrs.get('lighting', 'unknown')
+                                frame_summary += f"  🏞️ 장면: {scene_type}, 조명: {lighting}\n"
+                        
+                        frame_summary += "\n💡 위 프레임들을 참고하여 영상에서 해당 내용을 확인해보세요."
                         optimal_response += frame_summary
                     
                     # 통합 응답 저장
@@ -1482,22 +1658,145 @@ class VideoChatView(APIView):
             frame_results = analysis_json_data.get('frame_results', [])
             print(f"🔍 검색할 프레임 수: {len(frame_results)}")
             
-            # 모든 프레임을 기본적으로 포함 (사람 검색의 경우)
-            if any(keyword in message_lower for keyword in ['사람', 'person', 'people', 'human', '찾아', '보여']):
-                print("👤 사람 검색 모드")
+            # 색상 기반 검색
+            color_keywords = {
+                '빨간색': ['red', '빨강', '빨간색'],
+                '파란색': ['blue', '파랑', '파란색'],
+                '노란색': ['yellow', '노랑', '노란색'],
+                '초록색': ['green', '녹색', '초록색'],
+                '보라색': ['purple', '자주색', '보라색'],
+                '분홍색': ['pink', '핑크', '분홍색'],
+                '검은색': ['black', '검정', '검은색'],
+                '흰색': ['white', '하양', '흰색'],
+                '회색': ['gray', 'grey', '회색'],
+                '주황색': ['orange', '오렌지', '주황색'],
+                '갈색': ['brown', '브라운', '갈색'],
+                '옷': ['clothing', 'clothes', 'dress', 'shirt', 'pants', 'jacket']
+            }
+            
+            # 색상 검색 모드 확인
+            is_color_search = False
+            detected_colors = []
+            for color_korean, color_terms in color_keywords.items():
+                if any(term in message_lower for term in color_terms):
+                    is_color_search = True
+                    detected_colors.append(color_korean)
+                    print(f"🎨 색상 검색 감지: {color_korean}")
+            
+            # 색상 검색 모드 (우선순위)
+            if is_color_search:
+                print(f"🎨 색상 검색 모드: {detected_colors}")
+                print(f"🔍 검색할 프레임 수: {len(frame_results)}")
                 for frame in frame_results:
-                    frame_info = {
-                        'image_id': frame.get('image_id', 0),
-                        'timestamp': frame.get('timestamp', 0),
-                        'frame_image_path': frame.get('frame_image_path', ''),
-                        'image_url': f'/api/video/{video_id}/frame/{frame.get("image_id", 0)}/',
-                        'persons': frame.get('persons', []),
-                        'objects': frame.get('objects', []),
-                        'scene_attributes': frame.get('scene_attributes', {}),
-                        'relevance_score': 10  # 사람 검색 시 모든 프레임에 높은 점수
-                    }
-                    relevant_frames.append(frame_info)
-                    print(f"✅ 프레임 {frame_info['image_id']} 추가 (사람 검색)")
+                    persons = frame.get('persons', [])
+                    
+                    # 색상 분석 결과 확인
+                    dominant_colors = frame.get('dominant_colors', [])
+                    color_match_found = False
+                    
+                    # 요청된 색상과 매칭되는지 확인 (더 유연한 매칭)
+                    for detected_color in detected_colors:
+                        for color_info in dominant_colors:
+                            color_name = color_info.get('color', '').lower()
+                            detected_color_lower = detected_color.lower()
+                            
+                            # 색상 키워드 매핑을 통한 매칭
+                            color_mapping = {
+                                '분홍색': 'pink', '핑크': 'pink',
+                                '빨간색': 'red', '빨강': 'red',
+                                '파란색': 'blue', '파랑': 'blue',
+                                '노란색': 'yellow', '노랑': 'yellow',
+                                '초록색': 'green', '녹색': 'green',
+                                '보라색': 'purple', '자주색': 'purple',
+                                '검은색': 'black', '검정': 'black',
+                                '흰색': 'white', '하양': 'white',
+                                '회색': 'gray', 'grey': 'gray',
+                                '주황색': 'orange', '오렌지': 'orange',
+                                '갈색': 'brown', '브라운': 'brown'
+                            }
+                            
+                            # 매핑된 색상으로 비교
+                            mapped_color = color_mapping.get(detected_color_lower, detected_color_lower)
+                            
+                            # 정확한 매칭 또는 부분 매칭
+                            if (mapped_color == color_name or 
+                                detected_color_lower == color_name or 
+                                detected_color_lower in color_name or 
+                                color_name in detected_color_lower):
+                                color_match_found = True
+                                print(f"✅ 색상 매칭 발견: {detected_color} -> {color_info}")
+                                break
+                        if color_match_found:
+                            break
+                    
+                    # 디버깅을 위한 로그 추가
+                    print(f"🔍 프레임 {frame.get('image_id', 0)} 색상 분석:")
+                    print(f"  - 요청된 색상: {detected_colors}")
+                    print(f"  - 감지된 색상: {[c.get('color', '') for c in dominant_colors]}")
+                    print(f"  - 매칭 결과: {color_match_found}")
+                    
+                    # 색상 검색의 경우 색상 매칭이 된 프레임만 포함
+                    if color_match_found:
+                        frame_image_path = frame.get('frame_image_path', '')
+                        actual_image_path = None
+                        if frame_image_path:
+                            # 실제 파일 시스템 경로 생성
+                            import os
+                            from django.conf import settings
+                            actual_image_path = os.path.join(settings.MEDIA_ROOT, frame_image_path)
+                            if os.path.exists(actual_image_path):
+                                print(f"✅ 실제 이미지 파일 존재: {actual_image_path}")
+                            else:
+                                print(f"❌ 실제 이미지 파일 없음: {actual_image_path}")
+                        
+                        frame_info = {
+                            'image_id': frame.get('image_id', 0),
+                            'timestamp': frame.get('timestamp', 0),
+                            'frame_image_path': frame_image_path,
+                            'image_url': f'/media/{frame_image_path}',
+                            'actual_image_path': actual_image_path,  # 실제 파일 경로 추가
+                            'persons': persons,
+                            'objects': frame.get('objects', []),
+                            'scene_attributes': frame.get('scene_attributes', {}),
+                            'dominant_colors': dominant_colors,  # 색상 분석 결과 추가
+                            'relevance_score': 2,  # 색상 매칭 시 높은 점수
+                            'color_search_info': {
+                                'requested_colors': detected_colors,
+                                'color_info_available': len(dominant_colors) > 0,
+                                'color_match_found': color_match_found,
+                                'actual_image_available': actual_image_path is not None,
+                                'message': f"색상 분석 결과: {dominant_colors} | 요청하신 색상: {', '.join(detected_colors)}"
+                            }
+                        }
+                        relevant_frames.append(frame_info)
+                        print(f"✅ 프레임 {frame_info['image_id']} 추가 (색상 매칭 성공)")
+                    else:
+                        print(f"❌ 프레임 {frame.get('image_id', 0)}: 색상 매칭 실패 - {detected_colors} vs {dominant_colors}")
+            
+            # 사람 검색 모드
+            elif any(keyword in message_lower for keyword in ['사람', 'person', 'people', 'human', '찾아', '보여']):
+                print("👤 사람 검색 모드")
+                print(f"🔍 검색할 프레임 수: {len(frame_results)}")
+                for frame in frame_results:
+                    persons = frame.get('persons', [])
+                    print(f"🔍 프레임 {frame.get('image_id', 0)}: persons = {persons}")
+                    # 사람이 감지된 프레임만 포함
+                    if persons and len(persons) > 0:
+                        frame_info = {
+                            'image_id': frame.get('image_id', 0),
+                            'timestamp': frame.get('timestamp', 0),
+                            'frame_image_path': frame.get('frame_image_path', ''),
+                            'image_url': f'/media/{frame.get("frame_image_path", "")}',
+                            'persons': persons,
+                            'objects': frame.get('objects', []),
+                            'scene_attributes': frame.get('scene_attributes', {}),
+                            'relevance_score': len(persons) * 2  # 사람 수에 비례한 점수
+                        }
+                        relevant_frames.append(frame_info)
+                        print(f"✅ 프레임 {frame_info['image_id']} 추가 (사람 {len(persons)}명 감지)")
+                        print(f"✅ 프레임 상세 정보: {frame_info}")
+                    else:
+                        print(f"❌ 프레임 {frame.get('image_id', 0)}: 사람 감지 안됨")
             
             # 다른 키워드 검색
             else:
@@ -1523,7 +1822,7 @@ class VideoChatView(APIView):
                         'image_id': frame.get('image_id', 0),
                         'timestamp': frame.get('timestamp', 0),
                         'frame_image_path': frame.get('frame_image_path', ''),
-                        'image_url': f'/api/video/{video_id}/frame/{frame.get("image_id", 0)}/',
+                        'image_url': f'/media/{frame.get("frame_image_path", "")}',
                         'persons': frame.get('persons', []),
                         'objects': frame.get('objects', []),
                         'scene_attributes': frame.get('scene_attributes', {}),
@@ -1556,6 +1855,7 @@ class VideoChatView(APIView):
             relevant_frames.sort(key=lambda x: x['relevance_score'], reverse=True)
             result = relevant_frames[:3]
             print(f"🎯 최종 선택된 프레임 수: {len(result)}")
+            print(f"🎯 최종 프레임 상세: {result}")
             return result
             
         except Exception as e:
