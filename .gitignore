@@ -10,3 +10,4 @@ node_modules/
 .env
 >>>>>>> 4a47049b6c71701a6a5c214835ba99eddadbc2ac
 >>>>>>> Stashed changes
+.venv/
