@@ -1,5 +1,7 @@
 from django.urls import path, include
-from .views import ChatView, google_callback, kakao_callback, naver_callback, VideoUploadView, VideoChatView, VideoAnalysisView, VideoListView, FrameImageView
+from .views import ChatView, google_callback, kakao_callback, naver_callback, VideoUploadView, VideoChatView, VideoAnalysisView, VideoListView, FrameImageView, VideoSummaryView, VideoHighlightView
+from .video_search_view import VideoSearchView
+from .advanced_search_view import InterVideoSearchView, IntraVideoSearchView, TemporalAnalysisView
 
 urlpatterns = [
     path('chat/<str:bot_name>/', ChatView.as_view(), name='chat'),
@@ -16,4 +18,16 @@ urlpatterns = [
     path('api/video/<int:video_id>/chat/', VideoChatView.as_view(), name='video_chat'),
     path('api/video/chat/sessions/', VideoChatView.as_view(), name='video_chat_sessions'),
     path('api/video/<int:video_id>/frame/<int:frame_number>/', FrameImageView.as_view(), name='frame_image'),
+    
+    # 영상 요약 및 하이라이트 API
+    path('api/video/summary/', VideoSummaryView.as_view(), name='video_summary'),
+    path('api/video/highlights/', VideoHighlightView.as_view(), name='video_highlights'),
+    
+    # 영상 검색 API
+    path('api/video/search/', VideoSearchView.as_view(), name='video_search'),
+    
+    # 고급 검색 API
+    path('api/video/search/inter/', InterVideoSearchView.as_view(), name='inter_video_search'),
+    path('api/video/search/intra/', IntraVideoSearchView.as_view(), name='intra_video_search'),
+    path('api/video/analysis/temporal/', TemporalAnalysisView.as_view(), name='temporal_analysis'),
 ]
