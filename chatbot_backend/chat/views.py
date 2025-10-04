@@ -9,6 +9,10 @@ from django.http import HttpResponse, Http404
 from chat.serializers import UserSerializer, VideoChatSessionSerializer, VideoChatMessageSerializer, VideoAnalysisCacheSerializer
 from chat.models import VideoChatSession, VideoChatMessage, VideoAnalysisCache, Video
 from .services.video_analysis_service import video_analysis_service
+from .person_search_handler import handle_person_search_command
+from .advanced_search_view import InterVideoSearchView, IntraVideoSearchView, TemporalAnalysisView
+from .advanced_command_handler import handle_inter_video_search_command, handle_intra_video_search_command, handle_temporal_analysis_command
+from .ai_response_generator import ai_response_generator
 from django.utils import timezone
 import threading
 import openai
@@ -33,6 +37,14 @@ import requests
 import uuid
 from django.contrib.auth import get_user_model
 from chat.models import User, SocialAccount
+from django.conf import settings
+import json
+import logging
+import re
+from datetime import datetime, timedelta
+
+# 로거 설정
+logger = logging.getLogger(__name__)
 
 # 인코딩 문제 해결을 위한 설정
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -1042,6 +1054,12 @@ class VideoListView(APIView):
             video_list = []
             
             for video in videos:
+                # 상태 동기화 수행 (파일과 DB 상태 일치 확인)
+                video_analysis_service.sync_video_status_with_files(video.id)
+                
+                # 동기화 후 최신 상태로 다시 가져오기
+                video.refresh_from_db()
+                
                 # 분석 상태 결정 (더 정확한 판단)
                 actual_analysis_status = video.analysis_status
                 if video.analysis_status == 'completed' and not video.analysis_json_path:
@@ -1056,7 +1074,9 @@ class VideoListView(APIView):
                     'is_analyzed': video.is_analyzed,
                     'analysis_status': actual_analysis_status,  # 실제 상태 사용
                     'uploaded_at': video.uploaded_at,
-                    'file_size': video.file_size
+                    'file_size': video.file_size,
+                    'analysis_progress': video.analysis_progress,  # 진행률 정보 추가
+                    'analysis_message': video.analysis_message or ''  # 분석 메시지 추가
                 }
                 video_list.append(video_data)
             
@@ -1078,6 +1098,12 @@ class VideoAnalysisView(APIView):
         try:
             video = Video.objects.get(id=video_id)
             
+            # 상태 동기화 수행 (파일과 DB 상태 일치 확인)
+            video_analysis_service.sync_video_status_with_files(video_id)
+            
+            # 동기화 후 최신 상태로 다시 가져오기
+            video.refresh_from_db()
+            
             # 진행률 정보 추출
             progress_info = {
                 'analysis_progress': video.analysis_progress,
@@ -1097,11 +1123,11 @@ class VideoAnalysisView(APIView):
                 'analysis_status': actual_analysis_status,  # 실제 상태 사용
                 'is_analyzed': video.is_analyzed,
                 'duration': video.duration,
+                'progress': progress_info,  # 프론트엔드가 기대하는 구조로 변경
                 'uploaded_at': video.uploaded_at,
                 'file_size': video.file_size,
                 'analysis_json_path': video.analysis_json_path,
-                'frame_images_path': video.frame_images_path,
-                'progress': progress_info
+                'frame_images_path': video.frame_images_path
             })
         except Video.DoesNotExist:
             return Response({
@@ -1284,6 +1310,9 @@ class VideoChatView(APIView):
                 content=message
             )
             
+            # 특별 명령어 시스템 제거 - 모든 메시지를 일반 채팅으로 처리
+            print(f"🔍 일반 채팅 메시지 처리: '{message}'")
+            
             # 영상 분석 데이터 가져오기 (Video 모델에서 직접)
             analysis_data = {
                 'original_name': video.original_name,
@@ -1294,29 +1323,67 @@ class VideoChatView(APIView):
                 'is_analyzed': video.is_analyzed
             }
             
-            # JSON 분석 결과 로드
+            # JSON 분석 결과 로드 (기존 + TeletoVision_AI 스타일)
             analysis_json_data = None
+            teleto_vision_data = {}
+            
+            # 1. 기존 분석 JSON 로드
             if video.analysis_json_path:
                 try:
                     from django.conf import settings
                     json_path = os.path.join(settings.MEDIA_ROOT, video.analysis_json_path)
-                    print(f"🔍 JSON 파일 경로: {json_path}")
+                    print(f"🔍 기존 JSON 파일 경로: {json_path}")
                     print(f"🔍 파일 존재 여부: {os.path.exists(json_path)}")
                     
                     with open(json_path, 'r', encoding='utf-8') as f:
                         analysis_json_data = json.load(f)
-                    print(f"✅ JSON 분석 결과 로드 성공: {json_path}")
-                    print(f"📊 JSON 데이터 키: {list(analysis_json_data.keys())}")
+                    print(f"✅ 기존 JSON 분석 결과 로드 성공: {json_path}")
+                    print(f"📊 기존 JSON 데이터 키: {list(analysis_json_data.keys())}")
                     if 'frame_results' in analysis_json_data:
                         print(f"📊 frame_results 개수: {len(analysis_json_data['frame_results'])}")
                         if analysis_json_data['frame_results']:
                             print(f"📊 첫 번째 프레임: {analysis_json_data['frame_results'][0]}")
                 except Exception as e:
-                    print(f"❌ JSON 분석 결과 로드 실패: {e}")
+                    print(f"❌ 기존 JSON 분석 결과 로드 실패: {e}")
                     import traceback
                     print(f"❌ 상세 오류: {traceback.format_exc()}")
             else:
                 print("❌ analysis_json_path가 없습니다.")
+            
+            # 2. TeletoVision_AI 스타일 JSON 로드
+            try:
+                from django.conf import settings
+                video_name = video.original_name or video.filename
+                detection_db_path = os.path.join(settings.MEDIA_ROOT, f"{video_name}-detection_db.json")
+                meta_db_path = os.path.join(settings.MEDIA_ROOT, f"{video_name}-meta_db.json")
+                
+                print(f"🔍 TeletoVision detection_db 경로: {detection_db_path}")
+                print(f"🔍 TeletoVision meta_db 경로: {meta_db_path}")
+                
+                # detection_db.json 로드
+                if os.path.exists(detection_db_path):
+                    with open(detection_db_path, 'r', encoding='utf-8') as f:
+                        teleto_vision_data['detection_db'] = json.load(f)
+                    print(f"✅ TeletoVision detection_db 로드 성공: {len(teleto_vision_data['detection_db'])}개 프레임")
+                else:
+                    print(f"❌ TeletoVision detection_db 파일 없음: {detection_db_path}")
+                
+                # meta_db.json 로드
+                if os.path.exists(meta_db_path):
+                    with open(meta_db_path, 'r', encoding='utf-8') as f:
+                        teleto_vision_data['meta_db'] = json.load(f)
+                    print(f"✅ TeletoVision meta_db 로드 성공: {len(teleto_vision_data['meta_db'].get('frame', []))}개 프레임")
+                    if teleto_vision_data['meta_db'].get('frame'):
+                        first_frame = teleto_vision_data['meta_db']['frame'][0]
+                        print(f"📊 첫 번째 meta 프레임 키: {list(first_frame.keys())}")
+                else:
+                    print(f"❌ TeletoVision meta_db 파일 없음: {meta_db_path}")
+                    
+            except Exception as e:
+                print(f"❌ TeletoVision JSON 로드 실패: {e}")
+                import traceback
+                print(f"❌ 상세 오류: {traceback.format_exc()}")
+                teleto_vision_data = {}
                 print(f"❌ video.analysis_json_path: {video.analysis_json_path}")
             
             # 프레임 검색 및 이미지 URL 생성
@@ -1409,13 +1476,26 @@ class VideoChatView(APIView):
                         # 색상 검색 모드 확인
                         is_color_search = any(keyword in message.lower() for keyword in ['빨간색', '파란색', '노란색', '초록색', '보라색', '분홍색', '검은색', '흰색', '회색', '주황색', '갈색', '옷'])
                         
-                        # 영상 정보와 프레임 정보를 포함한 프롬프트 생성
+                        # 영상 정보와 JSON 분석 데이터를 포함한 프롬프트 생성
                         video_context = f"""
 영상 정보:
 - 파일명: {analysis_data.get('original_name', 'Unknown')}
 - 파일 크기: {analysis_data.get('file_size', 0) / (1024*1024):.1f}MB
 - 업로드 시간: {analysis_data.get('uploaded_at', 'Unknown')}
 - 상태: {analysis_data.get('analysis_status', 'Unknown')}
+
+📊 기존 영상 분석 데이터 (JSON):
+{json.dumps(analysis_json_data, ensure_ascii=False, indent=2)[:2000]}...
+
+📊 TeletoVision_AI 스타일 분석 데이터:
+- Detection DB: {json.dumps(teleto_vision_data.get('detection_db', {}), ensure_ascii=False, indent=2)[:1000]}...
+- Meta DB: {json.dumps(teleto_vision_data.get('meta_db', {}), ensure_ascii=False, indent=2)[:1000]}...
+
+💡 위 모든 JSON 데이터를 참고하여 사용자의 질문에 자연스럽게 답변해주세요.
+- 기존 분석 데이터와 TeletoVision_AI 스타일 데이터를 모두 활용
+- 요약, 하이라이트, 사람 찾기, 색상 검색 등 모든 질문에 대해 JSON 데이터를 활용
+- 각 AI의 특성에 맞게 답변 스타일을 조정
+- 구체적이고 유용한 정보 제공
 """
                         
                         # 관련 프레임 정보 추가 (색상 검색 모드에 따라 다르게 처리)
@@ -1523,8 +1603,61 @@ class VideoChatView(APIView):
 
 📸 이미지 분석: 위에 제공된 base64 이미지들을 직접 보고, 분홍색 옷을 입은 사람이 있는지 정확히 분석해주세요." if is_color_search else """""
                         
-                        # 기본 채팅 시스템과 동일한 방식으로 응답 생성
-                        ai_response = chatbot.chat(enhanced_message)
+                        # AI별 특성화된 프롬프트 생성
+                        if bot_name == 'gpt':
+                            ai_prompt = f"""
+당신은 GPT-4o입니다. 다음 영상 분석 데이터를 바탕으로 상세하고 체계적인 답변을 제공해주세요.
+
+{video_context}
+
+{frame_context}
+
+사용자 질문: {message}
+
+답변 요구사항:
+- 상세하고 체계적인 분석
+- 데이터 기반의 정확한 통계 제공
+- 논리적이고 구조화된 설명
+- 전문적이고 학술적인 톤
+- JSON 데이터의 구체적인 수치와 정보 활용
+"""
+                        elif bot_name == 'claude':
+                            ai_prompt = f"""
+당신은 Claude-3.5-Sonnet입니다. 다음 영상 분석 데이터를 바탕으로 간결하고 명확한 답변을 제공해주세요.
+
+{video_context}
+
+{frame_context}
+
+사용자 질문: {message}
+
+답변 요구사항:
+- 간결하고 명확한 설명
+- 핵심 정보에 집중
+- 실용적이고 이해하기 쉬운 톤
+- 효율적인 정보 전달
+- JSON 데이터의 핵심 정보만 추출
+"""
+                        else:  # mixtral
+                            ai_prompt = f"""
+당신은 Mixtral-8x7B입니다. 다음 영상 분석 데이터를 바탕으로 시각적이고 생동감 있는 답변을 제공해주세요.
+
+{video_context}
+
+{frame_context}
+
+사용자 질문: {message}
+
+답변 요구사항:
+- 시각적이고 구체적인 설명
+- 생동감 있는 표현
+- 창의적이고 독창적인 관점
+- 사용자 친화적인 톤
+- JSON 데이터를 시각적으로 해석
+"""
+                        
+                        # AI별 특성화된 프롬프트로 응답 생성
+                        ai_response = chatbot.chat(ai_prompt)
                         ai_responses[bot_name] = ai_response
                         
                         # 개별 AI 응답 저장
@@ -1861,6 +1994,87 @@ class VideoChatView(APIView):
         except Exception as e:
             print(f"❌ 프레임 검색 실패: {e}")
             return []
+    
+    def _handle_special_commands(self, message, video_id):
+        """특별 명령어 처리 (요약, 하이라이트)"""
+        try:
+            message_lower = message.lower().strip()
+            
+            # 영상 요약 명령어
+            if any(keyword in message_lower for keyword in ['요약', 'summary', '영상 요약', '영상 요약해줘', '영상 하이라이트 알려줘']):
+                return self._handle_video_summary_command(message_lower, video_id)
+            
+            # 영상 하이라이트 명령어
+            elif any(keyword in message_lower for keyword in ['하이라이트', 'highlight', '주요 장면', '중요한 장면']):
+                return self._handle_video_highlight_command(message_lower, video_id)
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ 특별 명령어 처리 오류: {e}")
+            return None
+    
+    def _handle_video_summary_command(self, message, video_id):
+        """영상 요약 명령어 처리"""
+        try:
+            # 요약 타입 결정
+            summary_type = 'comprehensive'
+            if '간단' in message or 'brief' in message:
+                summary_type = 'brief'
+            elif '상세' in message or 'detailed' in message:
+                summary_type = 'detailed'
+            
+            # VideoSummaryView 인스턴스 생성 및 요약 생성
+            summary_view = VideoSummaryView()
+            summary_result = summary_view._generate_video_summary(
+                Video.objects.get(id=video_id), 
+                summary_type
+            )
+            
+            if summary_result and summary_result.get('summary'):
+                return f"📝 **영상 요약** ({summary_type})\n\n{summary_result['summary']}"
+            else:
+                return "❌ 영상 요약을 생성할 수 없습니다. 영상 분석이 완료되었는지 확인해주세요."
+                
+        except Exception as e:
+            logger.error(f"❌ 영상 요약 명령어 처리 오류: {e}")
+            return f"❌ 영상 요약 생성 중 오류가 발생했습니다: {str(e)}"
+    
+    def _handle_video_highlight_command(self, message, video_id):
+        """영상 하이라이트 명령어 처리"""
+        try:
+            # 하이라이트 기준 설정
+            criteria = {
+                'min_score': 2.0,
+                'max_highlights': 5
+            }
+            
+            if '많이' in message or 'more' in message:
+                criteria['max_highlights'] = 10
+            elif '적게' in message or 'few' in message:
+                criteria['max_highlights'] = 3
+            
+            # VideoHighlightView 인스턴스 생성 및 하이라이트 추출
+            highlight_view = VideoHighlightView()
+            highlights = highlight_view._extract_highlights(
+                Video.objects.get(id=video_id), 
+                criteria
+            )
+            
+            if highlights:
+                highlight_text = "🎬 **영상 하이라이트**\n\n"
+                for i, highlight in enumerate(highlights, 1):
+                    highlight_text += f"{i}. **{highlight['timestamp']:.1f}초** - {highlight['description']}\n"
+                    highlight_text += f"   - 중요도: {highlight['significance']} (점수: {highlight['score']:.1f})\n"
+                    highlight_text += f"   - 인원: {highlight['person_count']}명, 장면: {highlight['scene_type']}\n\n"
+                
+                return highlight_text
+            else:
+                return "❌ 하이라이트를 찾을 수 없습니다. 영상 분석이 완료되었는지 확인해주세요."
+                
+        except Exception as e:
+            logger.error(f"❌ 영상 하이라이트 명령어 처리 오류: {e}")
+            return f"❌ 영상 하이라이트 생성 중 오류가 발생했습니다: {str(e)}"
 
 class FrameImageView(APIView):
     """프레임 이미지 서빙"""
@@ -1890,3 +2104,649 @@ class FrameImageView(APIView):
             return Response({
                 'error': f'프레임 이미지 로드 실패: {str(e)}'
             }, status=status.HTTP_404_NOT_FOUND)
+
+
+class VideoSummaryView(APIView):
+    """영상 요약 기능"""
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        try:
+            video_id = request.data.get('video_id')
+            summary_type = request.data.get('summary_type', 'comprehensive')  # comprehensive, brief, detailed
+            
+            logger.info(f"📝 영상 요약 요청: 비디오={video_id}, 타입={summary_type}")
+            
+            if not video_id:
+                return Response({'error': '비디오 ID가 필요합니다.'}, status=400)
+            
+            try:
+                video = Video.objects.get(id=video_id)
+            except Video.DoesNotExist:
+                return Response({'error': '비디오를 찾을 수 없습니다.'}, status=404)
+            
+            # 영상 요약 생성
+            summary_result = self._generate_video_summary(video, summary_type)
+            
+            return Response({
+                'video_id': video_id,
+                'video_name': video.original_name,
+                'summary_type': summary_type,
+                'summary_result': summary_result,
+                'analysis_type': 'video_summary'
+            })
+            
+        except Exception as e:
+            logger.error(f"❌ 영상 요약 오류: {e}")
+            return Response({'error': str(e)}, status=500)
+    
+    def _generate_video_summary(self, video, summary_type):
+        """영상 요약 생성"""
+        try:
+            # 분석 결과 JSON 파일 읽기
+            if not video.analysis_json_path:
+                return {
+                    'summary': '분석 결과가 없습니다. 영상 분석을 먼저 완료해주세요.',
+                    'key_events': [],
+                    'statistics': {},
+                    'duration': video.duration,
+                    'frame_count': 0
+                }
+            
+            json_path = os.path.join(settings.MEDIA_ROOT, video.analysis_json_path)
+            if not os.path.exists(json_path):
+                return {
+                    'summary': '분석 결과 파일을 찾을 수 없습니다.',
+                    'key_events': [],
+                    'statistics': {},
+                    'duration': video.duration,
+                    'frame_count': 0
+                }
+            
+            with open(json_path, 'r', encoding='utf-8') as f:
+                analysis_data = json.load(f)
+            
+            # 기본 통계 수집
+            statistics = self._collect_video_statistics(video, analysis_data)
+            
+            # 키 이벤트 추출
+            key_events = self._extract_key_events(analysis_data)
+            
+            # 요약 타입에 따른 처리
+            if summary_type == 'brief':
+                summary_text = self._generate_brief_summary(statistics, key_events)
+            elif summary_type == 'detailed':
+                summary_text = self._generate_detailed_summary(statistics, key_events, analysis_data)
+            else:  # comprehensive
+                summary_text = self._generate_comprehensive_summary(statistics, key_events, analysis_data)
+            
+            return {
+                'summary': summary_text,
+                'key_events': key_events,
+                'statistics': statistics,
+                'duration': video.duration,
+                'frame_count': len(analysis_data.get('frame_results', [])),
+                'summary_type': summary_type
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ 영상 요약 생성 오류: {e}")
+            return {
+                'summary': f'요약 생성 중 오류가 발생했습니다: {str(e)}',
+                'key_events': [],
+                'statistics': {},
+                'duration': video.duration,
+                'frame_count': 0
+            }
+    
+    def _collect_video_statistics(self, video, analysis_data):
+        """영상 통계 수집"""
+        try:
+            video_summary = analysis_data.get('video_summary', {})
+            frame_results = analysis_data.get('frame_results', [])
+            
+            # 기본 통계
+            stats = {
+                'total_duration': video.duration,
+                'total_frames': len(frame_results),
+                'total_detections': video_summary.get('total_detections', 0),
+                'unique_persons': video_summary.get('unique_persons', 0),
+                'quality_score': video_summary.get('quality_assessment', {}).get('overall_score', 0),
+                'scene_diversity': video_summary.get('scene_diversity', {}).get('diversity_score', 0)
+            }
+            
+            # 시간대별 활동 분석
+            temporal_analysis = video_summary.get('temporal_analysis', {})
+            stats.update({
+                'peak_time': temporal_analysis.get('peak_time_seconds', 0),
+                'peak_person_count': temporal_analysis.get('peak_person_count', 0),
+                'average_person_count': temporal_analysis.get('average_person_count', 0)
+            })
+            
+            # 장면 특성 분석
+            scene_distribution = video_summary.get('scene_diversity', {})
+            stats.update({
+                'scene_types': scene_distribution.get('scene_type_distribution', {}),
+                'activity_levels': scene_distribution.get('activity_level_distribution', {}),
+                'lighting_types': scene_distribution.get('lighting_distribution', {})
+            })
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"❌ 통계 수집 오류: {e}")
+            return {}
+    
+    def _extract_key_events(self, analysis_data):
+        """키 이벤트 추출"""
+        try:
+            key_events = []
+            frame_results = analysis_data.get('frame_results', [])
+            
+            # 사람 수가 많은 장면들을 키 이벤트로 선정
+            for frame in frame_results:
+                person_count = len(frame.get('persons', []))
+                if person_count >= 2:  # 2명 이상이 있는 장면
+                    key_events.append({
+                        'timestamp': frame.get('timestamp', 0),
+                        'description': f"{person_count}명이 감지된 장면",
+                        'person_count': person_count,
+                        'scene_type': frame.get('scene_attributes', {}).get('scene_type', 'unknown'),
+                        'activity_level': frame.get('scene_attributes', {}).get('activity_level', 'medium')
+                    })
+            
+            # 시간순으로 정렬
+            key_events.sort(key=lambda x: x['timestamp'])
+            
+            return key_events[:10]  # 상위 10개만 반환
+            
+        except Exception as e:
+            logger.error(f"❌ 키 이벤트 추출 오류: {e}")
+            return []
+    
+    def _generate_brief_summary(self, statistics, key_events):
+        """간단한 요약 생성"""
+        try:
+            summary_parts = []
+            
+            # 기본 정보
+            summary_parts.append(f"📹 영상 길이: {statistics.get('total_duration', 0):.1f}초")
+            summary_parts.append(f"👥 총 감지된 사람: {statistics.get('total_detections', 0)}명")
+            summary_parts.append(f"🎯 품질 점수: {statistics.get('quality_score', 0):.2f}/1.0")
+            
+            # 주요 이벤트
+            if key_events:
+                summary_parts.append(f"⭐ 주요 장면: {len(key_events)}개 발견")
+                peak_event = max(key_events, key=lambda x: x['person_count']) if key_events else None
+                if peak_event:
+                    summary_parts.append(f"   - 최대 {peak_event['person_count']}명이 동시에 등장")
+            
+            return "\n".join(summary_parts)
+            
+        except Exception as e:
+            logger.error(f"❌ 간단 요약 생성 오류: {e}")
+            return "요약 생성 중 오류가 발생했습니다."
+    
+    def _generate_detailed_summary(self, statistics, key_events, analysis_data):
+        """상세한 요약 생성"""
+        try:
+            summary_parts = []
+            
+            # 기본 정보
+            summary_parts.append("📊 **영상 분석 결과**")
+            summary_parts.append(f"• 영상 길이: {statistics.get('total_duration', 0):.1f}초")
+            summary_parts.append(f"• 분석된 프레임: {statistics.get('total_frames', 0)}개")
+            summary_parts.append(f"• 총 감지된 사람: {statistics.get('total_detections', 0)}명")
+            summary_parts.append(f"• 고유 인물: {statistics.get('unique_persons', 0)}명")
+            
+            # 품질 평가
+            quality_score = statistics.get('quality_score', 0)
+            quality_status = "우수" if quality_score > 0.8 else "양호" if quality_score > 0.6 else "보통"
+            summary_parts.append(f"• 영상 품질: {quality_status} ({quality_score:.2f}/1.0)")
+            
+            # 시간대별 분석
+            summary_parts.append(f"\n⏰ **시간대별 분석**")
+            summary_parts.append(f"• 최대 활동 시간: {statistics.get('peak_time', 0):.1f}초")
+            summary_parts.append(f"• 최대 동시 인원: {statistics.get('peak_person_count', 0)}명")
+            summary_parts.append(f"• 평균 동시 인원: {statistics.get('average_person_count', 0):.1f}명")
+            
+            # 장면 특성
+            scene_types = statistics.get('scene_types', {})
+            if scene_types:
+                summary_parts.append(f"\n🎬 **장면 특성**")
+                for scene_type, count in scene_types.items():
+                    summary_parts.append(f"• {scene_type}: {count}개 장면")
+            
+            # 주요 이벤트
+            if key_events:
+                summary_parts.append(f"\n⭐ **주요 이벤트**")
+                for i, event in enumerate(key_events[:5], 1):
+                    summary_parts.append(f"{i}. {event['timestamp']:.1f}초 - {event['description']}")
+            
+            return "\n".join(summary_parts)
+            
+        except Exception as e:
+            logger.error(f"❌ 상세 요약 생성 오류: {e}")
+            return "상세 요약 생성 중 오류가 발생했습니다."
+    
+    def _generate_comprehensive_summary(self, statistics, key_events, analysis_data):
+        """종합적인 요약 생성"""
+        try:
+            summary_parts = []
+            
+            # 제목
+            summary_parts.append("🎬 **영상 종합 분석 보고서**")
+            summary_parts.append("=" * 50)
+            
+            # 기본 정보
+            summary_parts.append(f"\n📋 **기본 정보**")
+            summary_parts.append(f"• 영상 길이: {statistics.get('total_duration', 0):.1f}초")
+            summary_parts.append(f"• 분석 프레임: {statistics.get('total_frames', 0)}개")
+            summary_parts.append(f"• 총 감지 객체: {statistics.get('total_detections', 0)}개")
+            summary_parts.append(f"• 고유 인물: {statistics.get('unique_persons', 0)}명")
+            
+            # 품질 평가
+            quality_score = statistics.get('quality_score', 0)
+            quality_status = "우수" if quality_score > 0.8 else "양호" if quality_score > 0.6 else "보통"
+            summary_parts.append(f"• 영상 품질: {quality_status} ({quality_score:.2f}/1.0)")
+            
+            # 시간대별 분석
+            summary_parts.append(f"\n⏰ **시간대별 활동 분석**")
+            summary_parts.append(f"• 최대 활동 시간: {statistics.get('peak_time', 0):.1f}초")
+            summary_parts.append(f"• 최대 동시 인원: {statistics.get('peak_person_count', 0)}명")
+            summary_parts.append(f"• 평균 동시 인원: {statistics.get('average_person_count', 0):.1f}명")
+            
+            # 장면 다양성
+            scene_types = statistics.get('scene_types', {})
+            activity_levels = statistics.get('activity_levels', {})
+            lighting_types = statistics.get('lighting_types', {})
+            
+            summary_parts.append(f"\n🎭 **장면 다양성 분석**")
+            summary_parts.append(f"• 장면 유형: {', '.join(scene_types.keys()) if scene_types else 'N/A'}")
+            summary_parts.append(f"• 활동 수준: {', '.join(activity_levels.keys()) if activity_levels else 'N/A'}")
+            summary_parts.append(f"• 조명 상태: {', '.join(lighting_types.keys()) if lighting_types else 'N/A'}")
+            summary_parts.append(f"• 다양성 점수: {statistics.get('scene_diversity', 0):.2f}/1.0")
+            
+            # 주요 이벤트 타임라인
+            if key_events:
+                summary_parts.append(f"\n⭐ **주요 이벤트 타임라인**")
+                for i, event in enumerate(key_events, 1):
+                    summary_parts.append(f"{i:2d}. {event['timestamp']:6.1f}초 - {event['description']}")
+                    summary_parts.append(f"     장면: {event.get('scene_type', 'unknown')}, 활동: {event.get('activity_level', 'medium')}")
+            
+            # 인사이트
+            summary_parts.append(f"\n💡 **주요 인사이트**")
+            if statistics.get('peak_person_count', 0) > 3:
+                summary_parts.append("• 다수의 인물이 등장하는 활발한 영상입니다")
+            if statistics.get('quality_score', 0) > 0.8:
+                summary_parts.append("• 높은 품질의 영상으로 상세한 분석이 가능합니다")
+            if statistics.get('scene_diversity', 0) > 0.5:
+                summary_parts.append("• 다양한 장면이 포함된 풍부한 콘텐츠입니다")
+            
+            return "\n".join(summary_parts)
+            
+        except Exception as e:
+            logger.error(f"❌ 종합 요약 생성 오류: {e}")
+            return "종합 요약 생성 중 오류가 발생했습니다."
+
+
+class VideoHighlightView(APIView):
+    """영상 하이라이트 자동 추출"""
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        try:
+            video_id = request.data.get('video_id')
+            highlight_criteria = request.data.get('criteria', {})
+            
+            logger.info(f"🎬 하이라이트 추출 요청: 비디오={video_id}, 기준={highlight_criteria}")
+            
+            if not video_id:
+                return Response({'error': '비디오 ID가 필요합니다.'}, status=400)
+            
+            try:
+                video = Video.objects.get(id=video_id)
+            except Video.DoesNotExist:
+                return Response({'error': '비디오를 찾을 수 없습니다.'}, status=404)
+            
+            # 하이라이트 추출
+            highlights = self._extract_highlights(video, highlight_criteria)
+            
+            return Response({
+                'video_id': video_id,
+                'video_name': video.original_name,
+                'highlights': highlights,
+                'total_highlights': len(highlights),
+                'analysis_type': 'video_highlights'
+            })
+            
+        except Exception as e:
+            logger.error(f"❌ 하이라이트 추출 오류: {e}")
+            return Response({'error': str(e)}, status=500)
+    
+    def _extract_highlights(self, video, criteria):
+        """하이라이트 추출"""
+        try:
+            # 분석 결과 JSON 파일 읽기
+            if not video.analysis_json_path:
+                return []
+            
+            json_path = os.path.join(settings.MEDIA_ROOT, video.analysis_json_path)
+            if not os.path.exists(json_path):
+                return []
+            
+            with open(json_path, 'r', encoding='utf-8') as f:
+                analysis_data = json.load(f)
+            
+            frame_results = analysis_data.get('frame_results', [])
+            if not frame_results:
+                return []
+            
+            # 프레임별 점수 계산
+            scored_frames = self._score_frames(frame_results, criteria)
+            
+            # 하이라이트 생성
+            highlights = self._create_highlights(scored_frames, criteria)
+            
+            return highlights
+            
+        except Exception as e:
+            logger.error(f"❌ 하이라이트 추출 오류: {e}")
+            return []
+    
+    def _score_frames(self, frame_results, criteria):
+        """프레임별 점수 계산"""
+        try:
+            scored_frames = []
+            
+            for frame in frame_results:
+                score = 0.0
+                
+                # 사람 수 점수 (더 많은 사람 = 더 높은 점수)
+                person_count = len(frame.get('persons', []))
+                if person_count > 0:
+                    score += person_count * 0.5
+                
+                # 품질 점수
+                quality_score = self._get_quality_score(frame)
+                score += quality_score * 0.3
+                
+                # 활동 수준 점수
+                activity_level = frame.get('scene_attributes', {}).get('activity_level', 'medium')
+                if activity_level == 'high':
+                    score += 1.0
+                elif activity_level == 'medium':
+                    score += 0.5
+                
+                # 장면 다양성 점수
+                scene_type = frame.get('scene_attributes', {}).get('scene_type', 'unknown')
+                if scene_type in ['detailed', 'complex']:
+                    score += 0.3
+                
+                # 신뢰도 점수
+                avg_confidence = self._get_average_confidence(frame)
+                score += avg_confidence * 0.2
+                
+                scored_frames.append({
+                    'frame': frame,
+                    'frame_id': frame.get('image_id', 0),
+                    'timestamp': frame.get('timestamp', 0),
+                    'score': score
+                })
+            
+            # 점수순으로 정렬
+            scored_frames.sort(key=lambda x: x['score'], reverse=True)
+            
+            return scored_frames
+            
+        except Exception as e:
+            logger.error(f"❌ 프레임 점수 계산 오류: {e}")
+            return []
+    
+    def _get_quality_score(self, frame):
+        """프레임 품질 점수 계산"""
+        try:
+            # 간단한 품질 점수 계산 (실제로는 더 복잡한 알고리즘 사용 가능)
+            persons = frame.get('persons', [])
+            if not persons:
+                return 0.0
+            
+            # 평균 신뢰도 기반 품질 점수
+            confidences = [person.get('confidence', 0) for person in persons]
+            avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+            
+            return avg_confidence
+            
+        except Exception as e:
+            logger.error(f"❌ 품질 점수 계산 오류: {e}")
+            return 0.0
+    
+    def _get_average_confidence(self, frame):
+        """평균 신뢰도 계산"""
+        try:
+            persons = frame.get('persons', [])
+            if not persons:
+                return 0.0
+            
+            confidences = [person.get('confidence', 0) for person in persons]
+            return sum(confidences) / len(confidences) if confidences else 0
+            
+        except Exception as e:
+            logger.error(f"❌ 평균 신뢰도 계산 오류: {e}")
+            return 0.0
+    
+    def _create_highlights(self, scored_frames, criteria):
+        """하이라이트 생성"""
+        try:
+            highlights = []
+            min_score = criteria.get('min_score', 2.0)  # 최소 점수
+            max_highlights = criteria.get('max_highlights', 10)  # 최대 하이라이트 수
+            
+            # 점수 기준 필터링
+            filtered_frames = [f for f in scored_frames if f['score'] >= min_score]
+            
+            # 시간 간격을 고려한 하이라이트 선택
+            selected_highlights = []
+            last_timestamp = -10  # 최소 10초 간격
+            
+            for frame_data in filtered_frames[:max_highlights * 2]:  # 여유분을 두고 선택
+                if frame_data['timestamp'] - last_timestamp >= 10:  # 10초 이상 간격
+                    selected_highlights.append(frame_data)
+                    last_timestamp = frame_data['timestamp']
+                    
+                    if len(selected_highlights) >= max_highlights:
+                        break
+            
+            # 하이라이트 정보 생성
+            for i, frame_data in enumerate(selected_highlights):
+                frame = frame_data['frame']
+                highlight = {
+                    'id': i + 1,
+                    'timestamp': frame_data['timestamp'],
+                    'frame_id': frame_data['frame_id'],
+                    'score': frame_data['score'],
+                    'description': self._generate_highlight_description(frame),
+                    'person_count': len(frame.get('persons', [])),
+                    'thumbnail_url': f'/api/frame/{frame.get("video_id", 0)}/{frame_data["frame_id"]}/',
+                    'significance': self._get_significance_level(frame_data['score']),
+                    'scene_type': frame.get('scene_attributes', {}).get('scene_type', 'unknown'),
+                    'activity_level': frame.get('scene_attributes', {}).get('activity_level', 'medium')
+                }
+                highlights.append(highlight)
+            
+            return highlights
+            
+        except Exception as e:
+            logger.error(f"❌ 하이라이트 생성 오류: {e}")
+            return []
+    
+    def _generate_highlight_description(self, frame):
+        """하이라이트 설명 생성"""
+        try:
+            persons = frame.get('persons', [])
+            person_count = len(persons)
+            
+            if person_count == 0:
+                return "주요 장면"
+            elif person_count == 1:
+                return "1명이 등장하는 장면"
+            elif person_count <= 3:
+                return f"{person_count}명이 등장하는 장면"
+            else:
+                return f"{person_count}명이 등장하는 활발한 장면"
+                
+        except Exception as e:
+            logger.error(f"❌ 하이라이트 설명 생성 오류: {e}")
+            return "주요 장면"
+    
+    def _get_significance_level(self, score):
+        """중요도 레벨 반환"""
+        try:
+            if score >= 4.0:
+                return "매우 높음"
+            elif score >= 3.0:
+                return "높음"
+            elif score >= 2.0:
+                return "보통"
+            else:
+                return "낮음"
+                
+        except Exception as e:
+            logger.error(f"❌ 중요도 레벨 계산 오류: {e}")
+            return "보통"
+    
+    def _handle_special_commands(self, message, video_id):
+        """특별 명령어 처리 (AI별 개별 답변 생성)"""
+        try:
+            message_lower = message.lower().strip()
+            print(f"🔍 특별 명령어 검사: '{message_lower}'")
+            
+            # 영상 요약 명령어
+            if any(keyword in message_lower for keyword in ['요약', 'summary', '영상 요약', '영상 요약해줘', '영상 하이라이트 알려줘', '간단한 요약', '상세한 요약']):
+                print(f"✅ 영상 요약 명령어 감지: '{message_lower}'")
+                return self._handle_ai_generated_response(video_id, 'video_summary', message_lower)
+            
+            # 영상 하이라이트 명령어
+            elif any(keyword in message_lower for keyword in ['하이라이트', 'highlight', '주요 장면', '중요한 장면']):
+                return self._handle_ai_generated_response(video_id, 'video_highlights', message_lower)
+            
+            # 사람 찾기 명령어
+            elif any(keyword in message_lower for keyword in ['사람 찾아줘', '사람 찾기', '인물 검색', '사람 검색']):
+                return self._handle_ai_generated_response(video_id, 'person_search', message_lower)
+            
+            # 영상 간 검색 명령어
+            elif any(keyword in message_lower for keyword in ['비가오는 밤', '비 오는 밤', '밤에 촬영', '어두운 영상', '비 오는 날']):
+                return self._handle_ai_generated_response(video_id, 'inter_video_search', {'query': message_lower})
+            
+            # 영상 내 검색 명령어
+            elif any(keyword in message_lower for keyword in ['주황색 상의', '주황 옷', '주황색 옷', '주황 상의', '오렌지 옷']):
+                return self._handle_ai_generated_response(video_id, 'intra_video_search', {'query': message_lower})
+            
+            # 시간대별 분석 명령어
+            elif any(keyword in message_lower for keyword in ['성비 분포', '성별 분포', '남녀 비율', '시간대별', '3시', '5시']):
+                time_range = {'start': 180, 'end': 300}  # 기본값: 3분-5분
+                return self._handle_ai_generated_response(video_id, 'temporal_analysis', {'time_range': time_range})
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ 특별 명령어 처리 오류: {e}")
+            return None
+    
+    def _handle_ai_generated_response(self, video_id, query_type, query_data=None):
+        """AI별 개별 답변 생성 및 통합"""
+        try:
+            logger.info(f"🤖 AI 응답 생성 시작: video_id={video_id}, query_type={query_type}")
+            
+            # AI 응답 생성
+            ai_responses = ai_response_generator.generate_responses(video_id, query_type, query_data)
+            
+            if not ai_responses:
+                return "❌ AI 응답 생성에 실패했습니다."
+            
+            # 개별 AI 답변들
+            individual_responses = ai_responses.get('individual', {})
+            optimal_response = ai_responses.get('optimal', '')
+            
+            # 통합 응답 생성
+            response_text = f"## 🎯 AI 통합 분석 결과\n\n{optimal_response}\n\n"
+            
+            # 각 AI별 답변 추가
+            response_text += "## 📊 각 AI별 개별 분석\n\n"
+            for ai_name, response in individual_responses.items():
+                ai_display_name = {
+                    'gpt': 'GPT-4o',
+                    'claude': 'Claude-3.5-Sonnet', 
+                    'mixtral': 'Mixtral-8x7B'
+                }.get(ai_name, ai_name.upper())
+                
+                response_text += f"### {ai_display_name}\n{response}\n\n"
+            
+            logger.info(f"✅ AI 응답 생성 완료: {len(response_text)}자")
+            return response_text
+            
+        except Exception as e:
+            logger.error(f"❌ AI 응답 생성 실패: {e}")
+            return f"❌ AI 응답 생성 중 오류가 발생했습니다: {str(e)}"
+    
+    def _handle_video_summary_command(self, message, video_id):
+        """영상 요약 명령어 처리"""
+        try:
+            # 요약 타입 결정
+            summary_type = 'comprehensive'
+            if '간단' in message or 'brief' in message:
+                summary_type = 'brief'
+            elif '상세' in message or 'detailed' in message:
+                summary_type = 'detailed'
+            
+            # VideoSummaryView 인스턴스 생성 및 요약 생성
+            summary_view = VideoSummaryView()
+            summary_result = summary_view._generate_video_summary(
+                Video.objects.get(id=video_id), 
+                summary_type
+            )
+            
+            if summary_result and summary_result.get('summary'):
+                return f"📝 **영상 요약** ({summary_type})\n\n{summary_result['summary']}"
+            else:
+                return "❌ 영상 요약을 생성할 수 없습니다. 영상 분석이 완료되었는지 확인해주세요."
+                
+        except Exception as e:
+            logger.error(f"❌ 영상 요약 명령어 처리 오류: {e}")
+            return f"❌ 영상 요약 생성 중 오류가 발생했습니다: {str(e)}"
+    
+    def _handle_video_highlight_command(self, message, video_id):
+        """영상 하이라이트 명령어 처리"""
+        try:
+            # 하이라이트 기준 설정
+            criteria = {
+                'min_score': 2.0,
+                'max_highlights': 5
+            }
+            
+            if '많이' in message or 'more' in message:
+                criteria['max_highlights'] = 10
+            elif '적게' in message or 'few' in message:
+                criteria['max_highlights'] = 3
+            
+            # VideoHighlightView 인스턴스 생성 및 하이라이트 추출
+            highlight_view = VideoHighlightView()
+            highlights = highlight_view._extract_highlights(
+                Video.objects.get(id=video_id), 
+                criteria
+            )
+            
+            if highlights:
+                highlight_text = "🎬 **영상 하이라이트**\n\n"
+                for i, highlight in enumerate(highlights, 1):
+                    highlight_text += f"{i}. **{highlight['timestamp']:.1f}초** - {highlight['description']}\n"
+                    highlight_text += f"   - 중요도: {highlight['significance']} (점수: {highlight['score']:.1f})\n"
+                    highlight_text += f"   - 인원: {highlight['person_count']}명, 장면: {highlight['scene_type']}\n\n"
+                
+                return highlight_text
+            else:
+                return "❌ 하이라이트를 찾을 수 없습니다. 영상 분석이 완료되었는지 확인해주세요."
+                
+        except Exception as e:
+            logger.error(f"❌ 영상 하이라이트 명령어 처리 오류: {e}")
+            return f"❌ 영상 하이라이트 생성 중 오류가 발생했습니다: {str(e)}"

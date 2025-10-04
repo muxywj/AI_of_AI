@@ -39,6 +39,90 @@ class VideoAnalysisService:
         
         logger.info("✅ 영상 분석 서비스 초기화 완료")
     
+    def sync_video_status_with_files(self, video_id):
+        """데이터베이스 상태와 실제 파일 상태를 동기화"""
+        try:
+            video = Video.objects.get(id=video_id)
+            
+            # 분석 결과 파일 확인 (경로가 None인 경우도 확인)
+            analysis_file_exists = False
+            analysis_file_path = None
+            
+            if video.analysis_json_path:
+                # 데이터베이스에 경로가 있는 경우
+                full_path = os.path.join(settings.MEDIA_ROOT, video.analysis_json_path)
+                analysis_file_exists = os.path.exists(full_path)
+                analysis_file_path = video.analysis_json_path
+            else:
+                # 데이터베이스에 경로가 없는 경우, 실제 파일 찾기
+                analysis_dir = os.path.join(settings.MEDIA_ROOT, 'analysis_results')
+                if os.path.exists(analysis_dir):
+                    for filename in os.listdir(analysis_dir):
+                        if f'analysis_{video_id}_' in filename and filename.endswith('.json'):
+                            analysis_file_path = f'analysis_results/{filename}'
+                            analysis_file_exists = True
+                            logger.info(f"🔍 영상 {video_id} 분석 파일 발견: {analysis_file_path}")
+                            break
+            
+            # 프레임 이미지 파일 확인 (경로가 None인 경우도 확인)
+            frame_files_exist = False
+            frame_image_paths = None
+            
+            if video.frame_images_path:
+                # 데이터베이스에 경로가 있는 경우
+                frame_paths = video.frame_images_path.split(',')
+                frame_files_exist = all(
+                    os.path.exists(os.path.join(settings.MEDIA_ROOT, path.strip()))
+                    for path in frame_paths
+                )
+                frame_image_paths = video.frame_images_path
+            else:
+                # 데이터베이스에 경로가 없는 경우, 실제 파일 찾기
+                images_dir = os.path.join(settings.MEDIA_ROOT, 'images')
+                if os.path.exists(images_dir):
+                    frame_files = []
+                    for filename in os.listdir(images_dir):
+                        if f'video{video_id}_frame' in filename and filename.endswith('.jpg'):
+                            frame_files.append(f'images/{filename}')
+                    
+                    if frame_files:
+                        frame_files_exist = all(
+                            os.path.exists(os.path.join(settings.MEDIA_ROOT, path))
+                            for path in frame_files
+                        )
+                        if frame_files_exist:
+                            frame_image_paths = ','.join(frame_files)
+                            logger.info(f"🔍 영상 {video_id} 프레임 이미지 발견: {len(frame_files)}개")
+            
+            # 상태 동기화 로직
+            if analysis_file_exists and frame_files_exist:
+                if video.analysis_status != 'completed':
+                    logger.info(f"🔄 영상 {video_id} 상태 동기화: completed로 변경")
+                    video.analysis_status = 'completed'
+                    video.analysis_progress = 100
+                    video.analysis_message = '분석 완료'
+                    
+                    # 파일 경로 업데이트
+                    if analysis_file_path and not video.analysis_json_path:
+                        video.analysis_json_path = analysis_file_path
+                    if frame_image_paths and not video.frame_images_path:
+                        video.frame_images_path = frame_image_paths
+                    
+                    video.save()
+                    return True
+            elif video.analysis_status == 'completed' and not analysis_file_exists:
+                logger.warning(f"⚠️ 영상 {video_id}: completed 상태이지만 분석 파일 없음")
+                video.analysis_status = 'failed'
+                video.analysis_message = '분석 파일이 없습니다'
+                video.save()
+                return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ 상태 동기화 실패: {e}")
+            return False
+    
     def _detect_persons_with_yolo(self, frame):
         """YOLO를 사용한 실제 사람 감지"""
         if not self.yolo_model:
@@ -217,8 +301,8 @@ class VideoAnalysisService:
                 logger.error(f"❌ 영상을 찾을 수 없습니다: {video_id}")
                 return False
             
-            # 분석 상태를 'analyzing'으로 업데이트
-            video.analysis_status = 'analyzing'
+            # 분석 상태를 'pending'으로 업데이트
+            video.analysis_status = 'pending'
             video.save()
             
             # 전체 파일 경로 구성
@@ -233,28 +317,53 @@ class VideoAnalysisService:
             if not json_file_path:
                 raise Exception("JSON 파일 저장에 실패했습니다")
             
-            # 분석 결과를 Video 모델에 저장
-            video.analysis_status = 'completed'
-            video.is_analyzed = True
-            video.duration = analysis_result.get('video_summary', {}).get('total_time_span', 0.0)
-            video.analysis_type = 'enhanced_opencv'
-            video.analysis_json_path = json_file_path
-            # 진행률을 100%로 설정
-            video.analysis_progress = 100
-            video.analysis_message = '분석 완료'
-            
-            # 프레임 이미지 경로 저장
-            frame_image_paths = [frame.get('frame_image_path') for frame in analysis_result.get('frame_results', []) if frame.get('frame_image_path')]
-            if frame_image_paths:
-                video.frame_images_path = ','.join(frame_image_paths)  # 쉼표로 구분하여 저장
-            
-            # 안전하게 저장
+            # 분석 결과를 Video 모델에 저장 (더 안전한 방식)
             try:
+                # 데이터베이스에서 최신 상태로 다시 가져오기
+                video = Video.objects.get(id=video_id)
+                
+                # 분석 결과 업데이트
+                video.analysis_status = 'completed'
+                video.is_analyzed = True
+                video.duration = analysis_result.get('video_summary', {}).get('total_time_span', 0.0)
+                video.analysis_type = 'enhanced_opencv'
+                video.analysis_json_path = json_file_path
+                video.analysis_progress = 100
+                video.analysis_message = '분석 완료'
+                
+                # 프레임 이미지 경로 저장
+                frame_image_paths = [frame.get('frame_image_path') for frame in analysis_result.get('frame_results', []) if frame.get('frame_image_path')]
+                if frame_image_paths:
+                    video.frame_images_path = ','.join(frame_image_paths)
+                
+                # 저장 시도
                 video.save()
-                logger.info(f"✅ 영상 분석 완료: {video_id}, JSON 저장: {json_file_path}")
+                logger.info(f"✅ 영상 분석 완료: {video_id}")
+                logger.info(f"✅ JSON 파일 저장: {json_file_path}")
                 logger.info(f"✅ Video 모델 저장 완료: analysis_json_path = {video.analysis_json_path}")
+                
+                # 저장 후 검증
+                video.refresh_from_db()
+                if video.analysis_status != 'completed':
+                    logger.error(f"❌ 상태 저장 검증 실패: {video.analysis_status}")
+                    raise Exception("분석 상태 저장 검증 실패")
+                    
             except Exception as save_error:
                 logger.error(f"❌ Video 모델 저장 실패: {save_error}")
+                logger.error(f"❌ 저장 실패 상세: {type(save_error).__name__}")
+                import traceback
+                logger.error(f"❌ 저장 실패 스택: {traceback.format_exc()}")
+                
+                # 저장 실패 시에도 최소한의 상태는 업데이트
+                try:
+                    video = Video.objects.get(id=video_id)
+                    video.analysis_status = 'failed'
+                    video.analysis_message = f'분석 완료되었으나 저장 실패: {str(save_error)}'
+                    video.save()
+                    logger.warning(f"⚠️ 최소 상태 업데이트 완료: {video_id}")
+                except Exception as fallback_error:
+                    logger.error(f"❌ 최소 상태 업데이트도 실패: {fallback_error}")
+                
                 raise
             
             return True
@@ -288,14 +397,26 @@ class VideoAnalysisService:
                 error_type = "numpy_error"
                 error_message = "영상 데이터 처리 중 오류가 발생했습니다."
             
-            # 분석 실패 상태 저장
+            # 분석 실패 상태 저장 (더 안전한 방식)
             try:
                 video = Video.objects.get(id=video_id)
                 video.analysis_status = 'failed'
+                video.analysis_progress = 0
                 video.analysis_message = f"분석 실패: {error_message}"
                 video.save()
+                
+                # 저장 후 검증
+                video.refresh_from_db()
+                if video.analysis_status != 'failed':
+                    logger.error(f"❌ 실패 상태 저장 검증 실패: {video.analysis_status}")
+                else:
+                    logger.info(f"✅ 분석 실패 상태 저장 완료: {video_id}")
+                    
             except Exception as save_error:
-                logger.error(f"에러 상태 저장 실패: {save_error}")
+                logger.error(f"❌ 에러 상태 저장 실패: {save_error}")
+                logger.error(f"❌ 에러 상태 저장 상세: {type(save_error).__name__}")
+                import traceback
+                logger.error(f"❌ 에러 상태 저장 스택: {traceback.format_exc()}")
             
             return {
                 'success': False,
@@ -427,47 +548,75 @@ class VideoAnalysisService:
                 frame_indices = [0, frame_count//4, frame_count//2, 3*frame_count//4, frame_count-1]
             elif frame_count > 2:
                 frame_indices = [0, frame_count//2, frame_count-1]
-            else:
+            elif frame_count > 0:
                 frame_indices = [0]
+            else:
+                raise Exception("영상에 프레임이 없습니다")
+            
+            # 프레임 인덱스 유효성 검사
+            frame_indices = [idx for idx in frame_indices if 0 <= idx < frame_count]
+            if not frame_indices:
+                raise Exception("유효한 프레임 인덱스를 찾을 수 없습니다")
             
             # 진행률 업데이트 (20%)
             self._update_progress(video_id, 20, f"프레임 샘플링 완료 ({len(frame_indices)}개 프레임)")
             time.sleep(0.5)
             
             for i, frame_idx in enumerate(frame_indices):
+                frame_read_success = False
+                retry_indices = [frame_idx]
+                
+                # 프레임 읽기 실패 시 주변 프레임 시도
+                if frame_idx > 0:
+                    retry_indices.append(frame_idx - 1)
+                if frame_idx < frame_count - 1:
+                    retry_indices.append(frame_idx + 1)
+                
+                for retry_idx in retry_indices:
+                    try:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, retry_idx)
+                        ret, frame = cap.read()
+                        if ret and frame is not None:
+                            frame_idx = retry_idx  # 실제 읽은 프레임 인덱스로 업데이트
+                            frame_read_success = True
+                            break
+                    except Exception as e:
+                        logger.warning(f"프레임 {retry_idx} 읽기 시도 실패: {e}")
+                        continue
+                
+                if not frame_read_success:
+                    logger.warning(f"프레임 {frame_idx} 읽기 완전 실패")
+                    continue
+                
                 try:
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                    ret, frame = cap.read()
-                    if ret and frame is not None:
                     # 프레임을 RGB로 변환
-                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                except Exception as e:
-                    logger.warning(f"프레임 {frame_idx} 처리 중 오류 발생: {e}")
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     
                     # 기본 통계 정보
                     mean_color = np.mean(frame_rgb, axis=(0, 1))
                     brightness = np.mean(frame_rgb)
-                        # 색상 히스토그램 분석 (안전하게)
+                    
+                    # 색상 히스토그램 분석 (안전하게)
                     try:
                         hist_r = cv2.calcHist([frame_rgb], [0], None, [256], [0, 256])
                         hist_g = cv2.calcHist([frame_rgb], [1], None, [256], [0, 256])
                         hist_b = cv2.calcHist([frame_rgb], [2], None, [256], [0, 256])
                     except Exception as hist_error:
-                            logger.warning(f"히스토그램 분석 실패: {hist_error}")
-                            hist_r = np.zeros((256, 1), dtype=np.float32)
-                            hist_g = np.zeros((256, 1), dtype=np.float32)
-                            hist_b = np.zeros((256, 1), dtype=np.float32)
+                        logger.warning(f"히스토그램 분석 실패: {hist_error}")
+                        hist_r = np.zeros((256, 1), dtype=np.float32)
+                        hist_g = np.zeros((256, 1), dtype=np.float32)
+                        hist_b = np.zeros((256, 1), dtype=np.float32)
                     
-                        # 엣지 검출 (안전하게)
+                    # 엣지 검출 (안전하게)
                     try:
                         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                         edges = cv2.Canny(gray, 50, 150)
                         edge_density = np.sum(edges > 0) / (width * height)
                     except Exception as edge_error:
-                            logger.warning(f"엣지 검출 실패: {edge_error}")
-                            edge_density = 0.0
-                        
-                        # 색상 분석 추가
+                        logger.warning(f"엣지 검출 실패: {edge_error}")
+                        edge_density = 0.0
+                    
+                    # 색상 분석 추가
                     dominant_colors = self._analyze_frame_colors(frame_rgb)
                     
                     sample_frames.append({
@@ -482,14 +631,19 @@ class VideoAnalysisService:
                             'red': hist_r.flatten().tolist()[:10],  # 처음 10개만 저장
                             'green': hist_g.flatten().tolist()[:10],
                             'blue': hist_b.flatten().tolist()[:10]
-                            },
-                            'dominant_colors': dominant_colors
+                        },
+                        'dominant_colors': dominant_colors
                     })
-                logger.info(f"✅ 프레임 {frame_idx} 분석 완료")
-                # 진행률 업데이트 (30% + 30% * (i+1)/len(frame_indices))
-                progress = 30 + int(30 * (i + 1) / len(frame_indices))
-                self._update_progress(video_id, progress, f"프레임 분석 중... ({i+1}/{len(frame_indices)})")
-                time.sleep(0.8)  # 진행률 확인을 위한 지연
+                    
+                    logger.info(f"✅ 프레임 {frame_idx} 분석 완료")
+                    # 진행률 업데이트 (30% + 30% * (i+1)/len(frame_indices))
+                    progress = 30 + int(30 * (i + 1) / len(frame_indices))
+                    self._update_progress(video_id, progress, f"프레임 분석 중... ({i+1}/{len(frame_indices)})")
+                    time.sleep(0.8)  # 진행률 확인을 위한 지연
+                    
+                except Exception as e:
+                    logger.warning(f"프레임 {frame_idx} 처리 중 오류 발생: {e}")
+                    continue
             
             cap.release()
             
@@ -937,16 +1091,495 @@ class VideoAnalysisService:
             json_filename = f"real_analysis_{video_id}_enhanced_{timestamp}.json"
             json_file_path = os.path.join(analysis_dir, json_filename)
             
-            # backend_videochat 형식으로 저장 (추가 메타데이터 없이 원본 구조 그대로)
+            # TeletoVision_AI 스타일로 저장
+            detection_db_path, meta_db_path = self._save_teleto_vision_format(video_id, analysis_result)
+            
+            # 기존 형식도 함께 저장 (호환성을 위해)
             with open(json_file_path, 'w', encoding='utf-8') as f:
                 json.dump(analysis_result, f, ensure_ascii=False, indent=2)
             
             logger.info(f"📄 분석 결과 JSON 저장 완료: {json_file_path}")
+            logger.info(f"📄 Detection DB 저장 완료: {detection_db_path}")
+            logger.info(f"📄 Meta DB 저장 완료: {meta_db_path}")
             return f"analysis_results/{json_filename}"
             
         except Exception as e:
             logger.error(f"❌ JSON 저장 실패: {e}")
             return None
+    
+    def _save_teleto_vision_format(self, video_id, analysis_result):
+        """TeletoVision_AI 스타일로 분석 결과 저장"""
+        try:
+            video = Video.objects.get(id=video_id)
+            video_name = video.original_name or video.filename
+            
+            # Detection DB 구조 생성
+            detection_db = self._create_detection_db(video_id, video_name, analysis_result)
+            
+            # Meta DB 구조 생성
+            meta_db = self._create_meta_db(video_id, video_name, analysis_result)
+            
+            # 파일 저장 경로
+            detection_db_path = os.path.join(settings.MEDIA_ROOT, f"{video_name}-detection_db.json")
+            meta_db_path = os.path.join(settings.MEDIA_ROOT, f"{video_name}-meta_db.json")
+            
+            # Detection DB 저장
+            with open(detection_db_path, 'w', encoding='utf-8') as f:
+                json.dump(detection_db, f, ensure_ascii=False, indent=2)
+            
+            # Meta DB 저장
+            with open(meta_db_path, 'w', encoding='utf-8') as f:
+                json.dump(meta_db, f, ensure_ascii=False, indent=2)
+            
+            return detection_db_path, meta_db_path
+            
+        except Exception as e:
+            logger.error(f"❌ TeletoVision 형식 저장 실패: {e}")
+            return None, None
+    
+    def _create_detection_db(self, video_id, video_name, analysis_result):
+        """Detection DB 구조 생성"""
+        try:
+            frame_results = analysis_result.get('frame_results', [])
+            video_summary = analysis_result.get('video_summary', {})
+            
+            # 기본 정보
+            detection_db = {
+                "video_id": video_name,
+                "fps": 30,  # 기본값, 실제로는 비디오에서 추출해야 함
+                "width": 1280,  # 기본값
+                "height": 720,   # 기본값
+                "frame": []
+            }
+            
+            # 프레임별 객체 정보 생성
+            for frame_data in frame_results:
+                frame_info = {
+                    "image_id": frame_data.get('frame_id', 1),
+                    "timestamp": frame_data.get('timestamp', 0),
+                    "objects": []
+                }
+                
+                # 사람 객체 정보
+                persons = frame_data.get('persons', [])
+                if persons:
+                    person_object = {
+                        "class": "person",
+                        "num": len(persons),
+                        "max_id": len(persons),
+                        "tra_id": list(range(1, len(persons) + 1)),
+                        "bbox": []
+                    }
+                    
+                    for person in persons:
+                        bbox = person.get('bbox', [0, 0, 0, 0])
+                        person_object["bbox"].append(bbox)
+                    
+                    frame_info["objects"].append(person_object)
+                
+                # 기타 객체들 (자동차, 오토바이 등)
+                objects = frame_data.get('objects', [])
+                if objects:
+                    for obj in objects:
+                        obj_info = {
+                            "class": obj.get('class_name', 'unknown'),
+                            "num": 1,
+                            "max_id": 1,
+                            "tra_id": [1],
+                            "bbox": [obj.get('bbox', [0, 0, 0, 0])]
+                        }
+                        frame_info["objects"].append(obj_info)
+                
+                detection_db["frame"].append(frame_info)
+            
+            return detection_db
+            
+        except Exception as e:
+            logger.error(f"❌ Detection DB 생성 실패: {e}")
+            return {"video_id": video_name, "fps": 30, "width": 1280, "height": 720, "frame": []}
+    
+    def _create_meta_db(self, video_id, video_name, analysis_result):
+        """Meta DB 구조 생성 (캡션 포함)"""
+        try:
+            frame_results = analysis_result.get('frame_results', [])
+            video_summary = analysis_result.get('video_summary', {})
+            
+            # 기본 정보
+            meta_db = {
+                "video_id": video_name,
+                "fps": 30,
+                "width": 1280,
+                "height": 720,
+                "frame": []
+            }
+            
+            # 프레임별 메타데이터 생성
+            for frame_data in frame_results:
+                # 캡션 생성
+                caption = self._generate_frame_caption(frame_data)
+                
+                frame_meta = {
+                    "image_id": frame_data.get('frame_id', 1),
+                    "timestamp": frame_data.get('timestamp', 0),
+                    "caption": caption,
+                    "objects": []
+                }
+                
+                # 사람 메타데이터
+                persons = frame_data.get('persons', [])
+                for i, person in enumerate(persons, 1):
+                    person_meta = {
+                        "class": "person",
+                        "id": i,
+                        "bbox": person.get('bbox', [0, 0, 0, 0]),
+                        "confidence": person.get('confidence', 0.0),
+                        "attributes": {
+                            "gender": person.get('gender', 'unknown'),
+                            "age": person.get('age', 'unknown'),
+                            "clothing": person.get('clothing', {}),
+                            "pose": person.get('pose', 'unknown')
+                        },
+                        "scene_context": {
+                            "scene_type": frame_data.get('scene_attributes', {}).get('scene_type', 'unknown'),
+                            "lighting": frame_data.get('scene_attributes', {}).get('lighting', 'unknown'),
+                            "activity_level": frame_data.get('scene_attributes', {}).get('activity_level', 'unknown')
+                        }
+                    }
+                    frame_meta["objects"].append(person_meta)
+                
+                # 기타 객체 메타데이터
+                objects = frame_data.get('objects', [])
+                for obj in objects:
+                    obj_meta = {
+                        "class": obj.get('class_name', 'unknown'),
+                        "id": 1,
+                        "bbox": obj.get('bbox', [0, 0, 0, 0]),
+                        "confidence": obj.get('confidence', 0.0),
+                        "attributes": obj.get('attributes', {}),
+                        "scene_context": {
+                            "scene_type": frame_data.get('scene_attributes', {}).get('scene_type', 'unknown'),
+                            "lighting": frame_data.get('scene_attributes', {}).get('lighting', 'unknown'),
+                            "activity_level": frame_data.get('scene_attributes', {}).get('activity_level', 'unknown')
+                        }
+                    }
+                    frame_meta["objects"].append(obj_meta)
+                
+                meta_db["frame"].append(frame_meta)
+            
+            return meta_db
+            
+        except Exception as e:
+            logger.error(f"❌ Meta DB 생성 실패: {e}")
+            return {"video_id": video_name, "fps": 30, "width": 1280, "height": 720, "frame": []}
+    
+    def _generate_frame_caption(self, frame_data):
+        """AI 기반 프레임 캡션 생성"""
+        try:
+            # 기본 정보 추출
+            persons = frame_data.get('persons', [])
+            objects = frame_data.get('objects', [])
+            scene_attributes = frame_data.get('scene_attributes', {})
+            timestamp = frame_data.get('timestamp', 0)
+            
+            # AI 캡션 생성 시도
+            ai_caption = self._generate_ai_caption(frame_data)
+            if ai_caption and ai_caption != "장면 분석 중 오류 발생":
+                return ai_caption
+            
+            # AI 실패 시 폴백: 규칙 기반 캡션
+            return self._generate_rule_based_caption(frame_data)
+            
+        except Exception as e:
+            logger.error(f"❌ 캡션 생성 실패: {e}")
+            return "장면 분석 중 오류 발생"
+    
+    def _generate_ai_caption(self, frame_data):
+        """Vision-Language 모델을 사용한 캡션 생성 (BLIP/GPT-4V)"""
+        try:
+            # 프레임 이미지 경로 확인
+            frame_image_path = frame_data.get('frame_image_path')
+            if not frame_image_path:
+                logger.warning("프레임 이미지 경로가 없어서 Vision 캡션 생성 불가")
+                return None
+            
+            # 이미지 파일 존재 확인
+            full_image_path = os.path.join(settings.MEDIA_ROOT, frame_image_path)
+            if not os.path.exists(full_image_path):
+                logger.warning(f"프레임 이미지 파일이 존재하지 않음: {full_image_path}")
+                return None
+            
+            # GPT-4 Vision 사용
+            caption = self._generate_gpt4v_caption(full_image_path, frame_data)
+            if caption:
+                return caption
+            
+            # BLIP 모델 사용 (로컬)
+            caption = self._generate_blip_caption(full_image_path)
+            if caption:
+                return caption
+            
+            logger.warning("모든 Vision 모델 캡션 생성 실패")
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Vision 캡션 생성 실패: {e}")
+            return None
+    
+    def _generate_gpt4v_caption(self, image_path, frame_data):
+        """GPT-4 Vision을 사용한 캡션 생성"""
+        try:
+            import openai
+            import base64
+            import os
+            
+            # OpenAI API 키 확인
+            if not os.getenv('OPENAI_API_KEY'):
+                logger.warning("OpenAI API 키가 없어서 GPT-4V 캡션 생성 불가")
+                return None
+            
+            # 이미지를 base64로 인코딩
+            with open(image_path, "rb") as image_file:
+                base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+            
+            client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            
+            # 프레임 정보 추가
+            timestamp = frame_data.get('timestamp', 0)
+            persons = frame_data.get('persons', [])
+            objects = frame_data.get('objects', [])
+            
+            prompt = f"""
+이 영상 프레임을 분석하여 한국어로 상세한 캡션을 생성해주세요.
+
+프레임 정보:
+- 시간: {timestamp:.1f}초
+- 감지된 사람: {len(persons)}명
+- 감지된 객체: {len(objects)}개
+
+캡션 요구사항:
+- 장면의 주요 내용을 자연스럽게 설명
+- 인물, 객체, 배경, 활동 등을 포함
+- 감정이나 분위기도 표현
+- 50자 이내로 간결하게
+- 한국어로 작성
+
+캡션만 답변해주세요 (설명 없이):
+"""
+            
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=150,
+                temperature=0.7
+            )
+            
+            caption = response.choices[0].message.content.strip()
+            logger.info(f"✅ GPT-4V 캡션 생성 성공: {caption}")
+            return caption
+            
+        except Exception as e:
+            logger.error(f"❌ GPT-4V 캡션 생성 실패: {e}")
+            return None
+    
+    def _generate_blip_caption(self, image_path):
+        """BLIP 모델을 사용한 캡션 생성 (로컬)"""
+        try:
+            from transformers import BlipProcessor, BlipForConditionalGeneration
+            from PIL import Image
+            import torch
+            
+            # BLIP 모델 로드 (처음 실행 시 다운로드됨)
+            processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+            model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
+            
+            # 이미지 로드
+            image = Image.open(image_path).convert('RGB')
+            
+            # 캡션 생성
+            inputs = processor(image, return_tensors="pt")
+            out = model.generate(**inputs, max_length=50, num_beams=5)
+            caption = processor.decode(out[0], skip_special_tokens=True)
+            
+            # 한국어 번역 (간단한 매핑)
+            korean_caption = self._translate_to_korean(caption)
+            
+            logger.info(f"✅ BLIP 캡션 생성 성공: {korean_caption}")
+            return korean_caption
+            
+        except Exception as e:
+            logger.error(f"❌ BLIP 캡션 생성 실패: {e}")
+            return None
+    
+    def _translate_to_korean(self, english_caption):
+        """간단한 영어-한국어 번역 (BLIP 결과용)"""
+        try:
+            # 기본적인 번역 매핑
+            translations = {
+                "a person": "사람",
+                "a man": "남성",
+                "a woman": "여성",
+                "a car": "자동차",
+                "a building": "건물",
+                "a street": "도로",
+                "a room": "방",
+                "a table": "테이블",
+                "a chair": "의자",
+                "a dog": "개",
+                "a cat": "고양이",
+                "walking": "걷고 있는",
+                "sitting": "앉아 있는",
+                "standing": "서 있는",
+                "talking": "대화하는",
+                "running": "뛰고 있는",
+                "driving": "운전하는",
+                "outdoor": "야외",
+                "indoor": "실내",
+                "daytime": "낮",
+                "night": "밤",
+                "bright": "밝은",
+                "dark": "어두운"
+            }
+            
+            korean_caption = english_caption.lower()
+            for eng, kor in translations.items():
+                korean_caption = korean_caption.replace(eng, kor)
+            
+            return korean_caption
+            
+        except Exception as e:
+            logger.error(f"❌ 번역 실패: {e}")
+            return english_caption
+    
+    def _format_frame_data_for_ai(self, frame_data):
+        """AI용 프레임 데이터 포맷팅"""
+        try:
+            persons = frame_data.get('persons', [])
+            objects = frame_data.get('objects', [])
+            scene_attributes = frame_data.get('scene_attributes', {})
+            timestamp = frame_data.get('timestamp', 0)
+            
+            description_parts = []
+            
+            # 시간 정보
+            description_parts.append(f"시간: {timestamp:.1f}초")
+            
+            # 장면 정보
+            scene_type = scene_attributes.get('scene_type', 'unknown')
+            lighting = scene_attributes.get('lighting', 'unknown')
+            activity_level = scene_attributes.get('activity_level', 'unknown')
+            
+            if scene_type != 'unknown':
+                description_parts.append(f"장소: {scene_type}")
+            if lighting != 'unknown':
+                description_parts.append(f"조명: {lighting}")
+            if activity_level != 'unknown':
+                description_parts.append(f"활동수준: {activity_level}")
+            
+            # 사람 정보
+            if persons:
+                description_parts.append(f"인물: {len(persons)}명")
+                for i, person in enumerate(persons[:3], 1):
+                    person_info = []
+                    if person.get('gender') != 'unknown':
+                        person_info.append(person['gender'])
+                    if person.get('age') != 'unknown':
+                        person_info.append(person['age'])
+                    if person.get('clothing', {}).get('dominant_color') != 'unknown':
+                        person_info.append(f"{person['clothing']['dominant_color']} 옷")
+                    
+                    if person_info:
+                        description_parts.append(f"  - 사람{i}: {', '.join(person_info)}")
+            
+            # 객체 정보
+            if objects:
+                object_names = [obj.get('class_name', 'unknown') for obj in objects]
+                unique_objects = list(set([name for name in object_names if name != 'unknown']))
+                if unique_objects:
+                    description_parts.append(f"객체: {', '.join(unique_objects[:5])}")
+            
+            return "\n".join(description_parts)
+            
+        except Exception as e:
+            logger.error(f"❌ 프레임 데이터 포맷팅 실패: {e}")
+            return "데이터 포맷팅 오류"
+    
+    def _generate_rule_based_caption(self, frame_data):
+        """규칙 기반 캡션 생성 (폴백)"""
+        try:
+            persons = frame_data.get('persons', [])
+            objects = frame_data.get('objects', [])
+            scene_attributes = frame_data.get('scene_attributes', {})
+            timestamp = frame_data.get('timestamp', 0)
+            
+            caption_parts = []
+            
+            # 시간 정보
+            caption_parts.append(f"시간 {timestamp:.1f}초")
+            
+            # 장면 정보
+            scene_type = scene_attributes.get('scene_type', 'unknown')
+            lighting = scene_attributes.get('lighting', 'unknown')
+            activity_level = scene_attributes.get('activity_level', 'unknown')
+            
+            if scene_type == 'indoor':
+                caption_parts.append("실내")
+            elif scene_type == 'outdoor':
+                caption_parts.append("야외")
+            
+            if lighting == 'dark':
+                caption_parts.append("어두운 조명")
+            elif lighting == 'bright':
+                caption_parts.append("밝은 조명")
+            
+            # 사람 정보
+            if persons:
+                person_count = len(persons)
+                caption_parts.append(f"{person_count}명의 사람")
+                
+                # 주요 인물 특성
+                if person_count <= 3:
+                    for person in persons[:2]:
+                        gender = person.get('gender', 'unknown')
+                        age = person.get('age', 'unknown')
+                        clothing = person.get('clothing', {})
+                        color = clothing.get('dominant_color', 'unknown')
+                        
+                        if gender != 'unknown' and age != 'unknown':
+                            caption_parts.append(f"{gender} {age}")
+                        if color != 'unknown':
+                            caption_parts.append(f"{color} 옷")
+            
+            # 객체 정보
+            if objects:
+                object_names = [obj.get('class_name', 'unknown') for obj in objects]
+                unique_objects = list(set(object_names))
+                if unique_objects:
+                    caption_parts.append(f"{', '.join(unique_objects[:3])} 등장")
+            
+            # 활동 수준
+            if activity_level == 'high':
+                caption_parts.append("활발한 활동")
+            elif activity_level == 'low':
+                caption_parts.append("조용한 장면")
+            
+            return ", ".join(caption_parts) if caption_parts else "일반적인 장면"
+            
+        except Exception as e:
+            logger.error(f"❌ 규칙 기반 캡션 생성 실패: {e}")
+            return "장면 분석 중 오류 발생"
 
 # 전역 인스턴스 생성
 video_analysis_service = VideoAnalysisService()
