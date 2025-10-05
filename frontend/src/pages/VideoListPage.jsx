@@ -1,14 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, Loader2, CheckCircle, XCircle, Clock, FileVideo } from 'lucide-react';
+import { Upload, Loader2, CheckCircle, XCircle, Clock, FileVideo, RefreshCw } from 'lucide-react';
 import { api } from '../utils/api';
-
-const BRAND = '#5d7c5b';
-const BRAND_BASE = '#8ba88a'; 
-const BRAND_HOVER = '#5d7c5b'; 
-const BRAND_TINT_BG = 'rgba(139, 168, 138, 0.05)';  
-const BRAND_TINT_BORDER = 'rgba(139, 168, 138, 0.4)';
-const NEUTRAL_BORDER = '#e5e7eb';
 
 const VideoListPage = () => {
   const navigate = useNavigate();
@@ -17,11 +10,8 @@ const VideoListPage = () => {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [isHover, setIsHover] = useState(false); 
-  const [restartingId, setRestartingId] = useState(null);
 
-  useEffect(() => { loadVideoList(); }, []);
-
+  // 비디오 목록 로드
   const loadVideoList = async () => {
     try {
       const response = await api.get('/api/video/list/');
@@ -31,23 +21,90 @@ const VideoListPage = () => {
     }
   };
 
+  // 분석 시작하기
+  const startAnalysis = async (videoId) => {
+    try {
+      const response = await api.post(`/api/video/${videoId}/analysis/`);
+      
+      if (response.data.status === 'pending') {
+        loadVideoList();
+        
+        const successToast = document.createElement('div');
+        successToast.className = 'fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 flex items-center';
+        successToast.innerHTML = `
+          <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+          </svg>
+          분석이 시작되었습니다.
+        `;
+        document.body.appendChild(successToast);
+        setTimeout(() => successToast.remove(), 3000);
+      }
+    } catch (error) {
+      console.error('분석 시작 실패:', error);
+      
+      const errorToast = document.createElement('div');
+      errorToast.className = 'fixed top-4 right-4 bg-red-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 flex items-center';
+      errorToast.innerHTML = `
+        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+        </svg>
+        분석 시작에 실패했습니다.
+      `;
+      document.body.appendChild(errorToast);
+      setTimeout(() => errorToast.remove(), 5000);
+    }
+  };
+
+  // 파일 유효성 검사
   const validateFile = (file) => {
     if (file.size > 50 * 1024 * 1024) {
-      alert(`파일 크기가 너무 큽니다. 최대 50MB까지 업로드 가능합니다. (현재: ${(file.size / (1024*1024)).toFixed(1)}MB)`);
+      const errorToast = document.createElement('div');
+      errorToast.className = 'fixed top-4 right-4 bg-red-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 flex items-center max-w-md';
+      errorToast.innerHTML = `
+        <svg class="w-5 h-5 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+        </svg>
+        <span>파일 크기가 너무 큽니다. 최대 50MB까지 업로드 가능합니다. (현재: ${(file.size / (1024*1024)).toFixed(1)}MB)</span>
+      `;
+      document.body.appendChild(errorToast);
+      setTimeout(() => errorToast.remove(), 5000);
       return false;
     }
+
     if (file.name.length > 200) {
-      alert('파일명이 너무 깁니다. 200자 이하로 제한됩니다.');
+      const errorToast = document.createElement('div');
+      errorToast.className = 'fixed top-4 right-4 bg-red-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 flex items-center';
+      errorToast.innerHTML = `
+        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+        </svg>
+        파일명이 너무 깁니다. 200자 이하로 제한됩니다.
+      `;
+      document.body.appendChild(errorToast);
+      setTimeout(() => errorToast.remove(), 5000);
       return false;
     }
+
     const allowedTypes = ['video/mp4', 'video/avi', 'video/mov', 'video/mkv', 'video/webm'];
     if (!allowedTypes.includes(file.type)) {
-      alert('지원하지 않는 파일 형식입니다. MP4, AVI, MOV, MKV, WEBM 파일을 업로드해주세요.');
+      const errorToast = document.createElement('div');
+      errorToast.className = 'fixed top-4 right-4 bg-red-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 flex items-center max-w-md';
+      errorToast.innerHTML = `
+        <svg class="w-5 h-5 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+        </svg>
+        <span>지원하지 않는 파일 형식입니다. MP4, AVI, MOV, MKV, WEBM 파일을 업로드해주세요.</span>
+      `;
+      document.body.appendChild(errorToast);
+      setTimeout(() => errorToast.remove(), 5000);
       return false;
     }
+
     return true;
   };
 
+  // 파일 업로드 처리
   const processFileUpload = async (file) => {
     if (!validateFile(file)) return;
 
@@ -60,262 +117,349 @@ const VideoListPage = () => {
 
     try {
       const response = await api.post('/api/video/upload/', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        onUploadProgress: (e) => {
-          const progress = Math.round((e.loaded * 100) / e.total);
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        onUploadProgress: (progressEvent) => {
+          const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
           setUploadProgress(progress);
         }
       });
 
       if (response.data.video_id) {
-        alert('영상이 성공적으로 업로드되었습니다! 분석이 시작됩니다.');
+        const successMessage = document.createElement('div');
+        successMessage.className = 'fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 flex items-center';
+        successMessage.innerHTML = `
+          <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+          </svg>
+          영상 업로드 완료! 분석이 시작됩니다.
+        `;
+        document.body.appendChild(successMessage);
+        setTimeout(() => successMessage.remove(), 3000);
+        
         loadVideoList();
       }
     } catch (error) {
       console.error('영상 업로드 실패:', error);
+      
       let errorMessage = '영상 업로드에 실패했습니다.';
-      if (error.response?.data?.error) errorMessage = error.response.data.error;
-      else if (error.message) errorMessage = `업로드 오류: ${error.message}`;
-      alert(errorMessage);
+      if (error.response?.data?.error) {
+        errorMessage = error.response.data.error;
+      } else if (error.message) {
+        errorMessage = `업로드 오류: ${error.message}`;
+      }
+      
+      const errorToast = document.createElement('div');
+      errorToast.className = 'fixed top-4 right-4 bg-red-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 flex items-center max-w-md';
+      errorToast.innerHTML = `
+        <svg class="w-5 h-5 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+        </svg>
+        <span>${errorMessage}</span>
+      `;
+      document.body.appendChild(errorToast);
+      setTimeout(() => errorToast.remove(), 5000);
     } finally {
       setUploading(false);
       setUploadProgress(0);
     }
   };
 
+  // 파일 업로드 (클릭)
   const handleFileUpload = async (e) => {
-    const file = e.target.files?.[0];
+    const file = e.target.files[0];
     if (!file) return;
     await processFileUpload(file);
   };
 
-  const handleDragOver = (e) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
-  const handleDragLeave = (e) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
+  // 드래그 앤 드롭 이벤트 핸들러
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  };
+
   const handleDrop = async (e) => {
-    e.preventDefault(); e.stopPropagation(); setIsDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) await processFileUpload(file);
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+
+    const file = files[0];
+    await processFileUpload(file);
   };
 
-  const startAnalysis = async (videoId) => {
-    setRestartingId(videoId);
-    try {
-      const tryForce = async () =>
-        api.post(`/api/video/${videoId}/analysis/`, { force: true }).then(r => r.data);
-  
-      const tryBasic = async () =>
-        api.post(`/api/video/${videoId}/analysis/`).then(r => r.data);
-  
-      const tryRestart = async () => {
-        const candidates = [
-          `/api/video/${videoId}/analysis/restart/`,
-          `/api/video/${videoId}/analysis/reanalyze/`,
-          `/api/video/${videoId}/analysis/restart`,
-          `/api/video/${videoId}/reanalyze/`,
-          `/api/video/${videoId}/reset/`,
-        ];
-        for (const url of candidates) {
-          try {
-            const { data } = await api.post(url);
-            return data;
-          } catch (e) {
-          }
-        }
-        throw new Error('재분석 엔드포인트 없음');
-      };
-  
-      let data;
-      try {
-        data = await tryForce();
-      } catch {
-        try {
-          data = await tryBasic();
-        } catch {
-          data = await tryRestart();
-        }
-      }
-  
-      const status = (data?.status || data?.analysis_status || '').toLowerCase();
-      const okStatuses = ['pending', 'started', 'processing', 'queued', 'queue', 'ok', 'success'];
-      const doneStatuses = ['completed', 'done', 'finished', 'ready'];
-  
-      if (okStatuses.includes(status)) {
-        alert('분석이 시작되었습니다.');
-      } else if (doneStatuses.includes(status)) {
-        alert('이미 완료된 분석이 있어 최신 상태로 갱신합니다.');
-      } else {
-        alert(data?.message || '분석 요청을 전송했습니다.');
-      }
-  
-      await loadVideoList();
-    } catch (error) {
-      console.error('분석 시작 실패:', error);
-      alert('분석 시작에 실패했습니다.');
-    } finally {
-      setRestartingId(null);
+  // 비디오 선택
+  const selectVideo = (video) => {
+    navigate(`/video-chat/${video.id}`);
+  };
+
+  // 컴포넌트 마운트 시 초기화
+  useEffect(() => {
+    loadVideoList();
+  }, []);
+
+  // 주기적으로 영상 목록 업데이트 (분석 중인 영상이 있을 때)
+  useEffect(() => {
+    const hasAnalyzingVideos = videoList.some(video => 
+      video.analysis_status === 'pending' || 
+      video.analysis_status === 'analyzing' || 
+      video.analysis_status === 'uploaded'
+    );
+
+    if (hasAnalyzingVideos) {
+      const interval = setInterval(() => {
+        loadVideoList();
+      }, 3000);
+
+      return () => clearInterval(interval);
     }
-  };
-
-  const selectVideo = (video) => { navigate(`/video-chat/${video.id}`); };
-
-  // 드롭존 스타일 (파란색 → 연그린 계열)
-  const dropzoneStyle = (() => {
-    if (uploading) return { borderColor: '#d1d5db', backgroundColor: '#f9fafb' };
-    if (isHover || isDragOver) return { borderColor: BRAND_TINT_BORDER, backgroundColor: BRAND_TINT_BG };
-    return { borderColor: NEUTRAL_BORDER, backgroundColor: 'white' };
-  })();
-  const dropzoneTextColor = (isHover || isDragOver) ? BRAND : '#374151';
+  }, [videoList]);
 
   return (
-    <div className="min-h-screen" style={{ background: "rgba(245, 242, 234, 0.4)" }}>
-      <div className="max-w-4xl mx-auto p-6">
-        <div className="mb-6">
-          {/* 제목 색상 → #5d7c5b */}
-          <h1 className="text-3xl font-bold mb-2" style={{ color: BRAND }}>영상 채팅</h1>
-          <p className="text-gray-600">영상을 업로드하고 AI와 채팅해보세요</p>
-        </div>
+    <div className="max-w-4xl mx-auto p-6">
+      <div className="mb-6">
+        <h1 className="text-3xl font-bold text-gray-800 mb-2">영상 채팅</h1>
+        <p className="text-gray-600">영상을 업로드하고 AI와 채팅해보세요</p>
+      </div>
 
-        {/* 업로드 영역 (연그린 hover) */}
-        <div className="mb-8">
-          <div
-            className="border-2 border-dashed rounded-lg p-8 text-center transition-all duration-300"
-            style={{ 
-              ...dropzoneStyle,
-              transform: (isHover || isDragOver) ? 'scale(1.02)' : 'scale(1.0)'
-            }}
-            onMouseEnter={() => setIsHover(true)}
-            onMouseLeave={() => setIsHover(false)}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
+      {/* 업로드 영역 */}
+      <div className="mb-8">
+        <div 
+          className={`border-2 border-dashed rounded-lg p-8 text-center transition-all duration-300 ${
+            isDragOver 
+              ? 'border-blue-500 bg-blue-50 scale-105' 
+              : uploading 
+                ? 'border-gray-300 bg-gray-50' 
+                : 'border-gray-300 hover:border-blue-400 hover:bg-blue-50'
+          }`}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          <input
+            type="file"
+            accept="video/*"
+            onChange={handleFileUpload}
+            className="hidden"
+            id="video-upload"
+            disabled={uploading}
+          />
+          <label
+            htmlFor="video-upload"
+            className={`flex flex-col items-center ${uploading ? 'cursor-not-allowed' : 'cursor-pointer'}`}
           >
-            <input
-              type="file"
-              accept="video/*"
-              onChange={handleFileUpload}
-              className="hidden"
-              id="video-upload"
-              disabled={uploading}
-            />
-            <label htmlFor="video-upload" className={`flex flex-col items-center ${uploading ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
-              {uploading ? (
-                <>
-                  <Loader2 className="w-12 h-12 text-gray-500 animate-spin mb-4" />
-                  <h3 className="text-lg font-semibold text-gray-700 mb-2">업로드 중...</h3>
-                  <div className="w-full max-w-xs bg-gray-200 rounded-full h-2 mb-2">
-                    <div className="h-2 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%`, backgroundColor: BRAND }} />
+            {uploading ? (
+              <>
+                <div className="relative mb-6">
+                  <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center shadow-lg">
+                    <Upload className="w-8 h-8 text-blue-500 animate-bounce" />
                   </div>
-                  <p className="text-gray-500">{uploadProgress}% 완료</p>
-                </>
-              ) : (
-                <>
-                  <Upload className="w-12 h-12 mb-4" style={{ color: dropzoneTextColor }} />
-                  <h3 className="text-lg font-semibold mb-2" style={{ color: dropzoneTextColor }}>
-                    {isDragOver ? '영상을 여기에 놓으세요' : '영상 업로드'}
-                  </h3>
-                  <p className="mb-4" style={{ color: (isHover || isDragOver) ? BRAND : '#6b7280' }}>
-                    {isDragOver ? '마우스를 놓으면 업로드됩니다' : '클릭하거나 드래그하여 영상 파일을 선택하세요'}
-                  </p>
-                  <p className="text-sm text-gray-400">MP4, AVI, MOV, MKV, WEBM 지원 (최대 50MB)</p>
-                </>
-              )}
-            </label>
-          </div>
-        </div>
-
-        {/* 비디오 목록 */}
-        {videoList.length > 0 && (
-          <div>
-            <h2 className="text-xl font-semibold text-gray-800 mb-4">업로드된 영상</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {videoList.map((video) => (
-                <div key={video.id} className="bg-white rounded-lg shadow-md p-4 hover:shadow-lg transition-shadow border">
-                  <div className="flex items-center mb-3">
-                    {/* FileVideo 아이콘 → #5d7c5b */}
-                    <FileVideo className="w-8 h-8 mr-3" style={{ color: BRAND }} />
-                    <div className="flex-1 min-w-0">
-                      <h3 className="font-medium text-gray-800 truncate">{video.original_name}</h3>
-                      <p className="text-sm text-gray-500">{new Date(video.uploaded_at).toLocaleDateString()}</p>
+                  <div className="absolute inset-0 w-16 h-16 bg-blue-200 rounded-full animate-ping opacity-20"></div>
+                </div>
+                
+                <h3 className="text-xl font-bold text-gray-800 mb-4">영상 업로드 중</h3>
+                
+                <div className="bg-white/80 backdrop-blur-sm rounded-xl p-6 mb-4 shadow-md max-w-sm w-full">
+                  <div className="text-center mb-4">
+                    <p className="text-gray-700 font-medium mb-2">파일을 서버에 전송하고 있습니다...</p>
+                    <div className="flex items-center justify-center text-sm text-gray-500">
+                      <Clock className="w-4 h-4 mr-1" />
+                      <span>잠시만 기다려주세요</span>
                     </div>
                   </div>
-
-                  <div className="flex items-center justify-between text-sm mb-3">
-                    <span className="text-gray-500">{(video.file_size / (1024 * 1024)).toFixed(1)}MB</span>
-                    <div className="flex items-center">
-                      {video.analysis_status === 'completed' && <CheckCircle className="w-4 h-4 text-green-500 mr-1" />}
-                      {video.analysis_status === 'pending' && <Clock className="w-4 h-4 text-yellow-500 mr-1" />}
-                      {video.analysis_status === 'failed' && <XCircle className="w-4 h-4 text-red-500 mr-1" />}
-                      <span className={`text-xs font-medium ${
-                        video.analysis_status === 'completed' ? 'text-green-600' :
-                        video.analysis_status === 'pending' ? 'text-yellow-600' : 'text-red-600'
-                      }`}>
-                        {video.analysis_status === 'completed' ? '분석 완료' :
-                         video.analysis_status === 'pending' ? '분석 중' : '분석 실패'}
-                      </span>
+                  
+                  <div className="mb-4">
+                    <div className="flex justify-between text-sm text-gray-600 mb-2">
+                      <span className="font-medium">업로드 진행률</span>
+                      <span className="font-bold text-blue-600">{uploadProgress}%</span>
                     </div>
-                  </div>
-
-                  {/* 액션 버튼들 */}
-                  <div className="flex gap-2">
-                    {video.analysis_status === 'completed' && (
-                      <button
-                        className="flex-1 px-6 py-3 rounded-lg transition-colors font-bold text-white"
-                        style={{ backgroundColor: BRAND_BASE }}
-                        onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = BRAND_HOVER; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = BRAND_BASE; }}
-                        onClick={() => selectVideo(video)}
+                    <div className="w-full bg-gray-200 rounded-full h-4 shadow-inner">
+                      <div
+                        className="bg-gradient-to-r from-blue-500 via-blue-600 to-indigo-600 h-4 rounded-full transition-all duration-500 ease-out shadow-sm relative overflow-hidden"
+                        style={{ width: `${uploadProgress}%` }}
                       >
-                        채팅하기
-                      </button>
-                    )}
+                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white to-transparent opacity-30 animate-pulse"></div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <div className={`flex items-center text-sm ${uploadProgress >= 25 ? 'text-green-600' : 'text-gray-400'}`}>
+                      <div className={`w-2 h-2 rounded-full mr-2 ${uploadProgress >= 25 ? 'bg-green-500' : 'bg-gray-300'}`}></div>
+                      파일 검증 중...
+                    </div>
+                    <div className={`flex items-center text-sm ${uploadProgress >= 50 ? 'text-green-600' : 'text-gray-400'}`}>
+                      <div className={`w-2 h-2 rounded-full mr-2 ${uploadProgress >= 50 ? 'bg-green-500' : 'bg-gray-300'}`}></div>
+                      서버로 전송 중...
+                    </div>
+                    <div className={`flex items-center text-sm ${uploadProgress >= 90 ? 'text-green-600' : 'text-gray-400'}`}>
+                      <div className={`w-2 h-2 rounded-full mr-2 ${uploadProgress >= 90 ? 'bg-green-500' : 'bg-gray-300'}`}></div>
+                      저장 완료!
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="text-center">
+                  <div className="bg-blue-100/50 rounded-lg p-3 mb-2">
+                    <p className="text-sm text-blue-700 font-medium">
+                      업로드 완료 후 자동으로 분석이 시작됩니다
+                    </p>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    파일 크기에 따라 업로드 시간이 달라질 수 있습니다
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <Upload className={`w-12 h-12 mb-4 ${isDragOver ? 'text-blue-500' : 'text-gray-400'}`} />
+                <h3 className={`text-lg font-semibold mb-2 ${isDragOver ? 'text-blue-600' : 'text-gray-700'}`}>
+                  {isDragOver ? '영상을 여기에 놓으세요' : '영상 업로드'}
+                </h3>
+                <p className={`mb-4 ${isDragOver ? 'text-blue-500' : 'text-gray-500'}`}>
+                  {isDragOver ? '마우스를 놓으면 업로드됩니다' : '클릭하거나 드래그하여 영상 파일을 선택하세요'}
+                </p>
+                <p className="text-sm text-gray-400">MP4, AVI, MOV, MKV, WEBM 지원 (최대 50MB)</p>
+              </>
+            )}
+          </label>
+        </div>
+      </div>
 
-                    {video.analysis_status === 'pending' && (
-                      <div className="flex-1">
-                        <button
-                          disabled
-                          className="w-full px-3 py-2 bg-gray-300 text-gray-500 text-sm rounded-lg cursor-not-allowed"
-                        >
-                          분석 중... ({video.analysis_progress || 0}%)
-                        </button>
-                        {video.analysis_message && (
-                          <p className="text-xs text-gray-500 mt-1 text-center">{video.analysis_message}</p>
-                        )}
+      {/* 비디오 목록 */}
+      {videoList.length > 0 && (
+        <div>
+          <h2 className="text-xl font-semibold text-gray-800 mb-4">업로드된 영상</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {videoList.map((video) => (
+              <div
+                key={video.id}
+                onClick={() => video.analysis_status === 'completed' && selectVideo(video)}
+                className={`bg-white rounded-lg shadow-md p-4 border ${
+                  video.analysis_status === 'completed' 
+                    ? 'hover:shadow-lg transition-shadow cursor-pointer' 
+                    : 'cursor-default'
+                }`}
+              >
+                <div className="flex items-center mb-3">
+                  <FileVideo className="w-8 h-8 text-blue-500 mr-3" />
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-medium text-gray-800 truncate">
+                      {video.original_name}
+                    </h3>
+                    <p className="text-sm text-gray-500">
+                      {new Date(video.uploaded_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="flex items-center justify-between text-sm mb-3">
+                  <span className="text-gray-500">
+                    {(video.file_size / (1024 * 1024)).toFixed(1)}MB
+                  </span>
+                  <div className="flex items-center">
+                    {video.analysis_status === 'completed' && (
+                      <div className="flex items-center bg-green-50 text-green-700 px-2 py-1 rounded-full text-xs font-medium">
+                        <CheckCircle className="w-3 h-3 mr-1" />
+                        분석 완료
                       </div>
                     )}
-
-                    {video.analysis_status === 'failed' && (
-                    <div className="flex-1">
-                        <button
-                        onClick={() => startAnalysis(video.id)}
-                        className="w-full px-6 py-3 rounded-lg font-bold bg-gray-300 text-gray-600 hover:bg-gray-400 transition-colors flex items-center justify-center gap-2"
-                        disabled={restartingId === video.id}
-                        >
-                        {restartingId === video.id && (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                        )}
-                        다시 분석
-                        </button>
-                        {video.analysis_message && (
-                        <p className="text-xs text-red-500 mt-1 text-center">{video.analysis_message}</p>
-                        )}
-                    </div>
+                    {(video.analysis_status === 'pending' || video.analysis_status === 'analyzing') && (
+                      <div className="flex items-center bg-yellow-50 text-yellow-700 px-2 py-1 rounded-full text-xs font-medium">
+                        <Clock className="w-3 h-3 mr-1 animate-pulse" />
+                        분석 중 ({video.analysis_progress || 0}%)
+                      </div>
                     )}
-
+                    {video.analysis_status === 'failed' && (
+                      <div className="flex items-center bg-red-50 text-red-700 px-2 py-1 rounded-full text-xs font-medium">
+                        <XCircle className="w-3 h-3 mr-1" />
+                        분석 실패
+                      </div>
+                    )}
                     {(!video.analysis_status || video.analysis_status === 'uploaded') && (
-                      <button
-                        onClick={() => startAnalysis(video.id)}
-                        className="flex-1 px-3 py-2 bg-green-500 text-white text-sm rounded-lg hover:bg-green-600 transition-colors"
-                      >
-                        분석 시작
-                      </button>
+                      <div className="flex items-center bg-gray-50 text-gray-700 px-2 py-1 rounded-full text-xs font-medium">
+                        <FileVideo className="w-3 h-3 mr-1" />
+                        업로드 완료
+                      </div>
                     )}
                   </div>
                 </div>
-              ))}
-            </div>
+                
+                <div className="flex gap-2">
+                  {video.analysis_status === 'completed' && (
+                    <button
+                      onClick={() => selectVideo(video)}
+                      className="flex-1 px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white text-sm rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center"
+                    >
+                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                      </svg>
+                      채팅하기
+                    </button>
+                  )}
+                  {(video.analysis_status === 'pending' || video.analysis_status === 'analyzing') && (
+                    <div className="flex-1">
+                      <button
+                        disabled
+                        className="w-full px-4 py-2 bg-gradient-to-r from-yellow-400 to-yellow-500 text-white text-sm rounded-lg cursor-not-allowed flex items-center justify-center"
+                      >
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        분석 중... ({video.analysis_progress || 0}%)
+                      </button>
+                      {video.analysis_message && (
+                        <div className="mt-2 p-2 bg-yellow-50 rounded-lg">
+                          <p className="text-xs text-yellow-700 text-center">
+                            {video.analysis_message}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {video.analysis_status === 'failed' && (
+                    <div className="flex-1">
+                      <button
+                        onClick={() => startAnalysis(video.id)}
+                        className="w-full px-4 py-2 bg-gradient-to-r from-yellow-500 to-orange-500 text-white text-sm rounded-lg hover:from-yellow-600 hover:to-orange-600 transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center"
+                      >
+                        <RefreshCw className="w-4 h-4 mr-2" />
+                        다시 분석
+                      </button>
+                      {video.analysis_message && (
+                        <div className="mt-2 p-2 bg-red-50 rounded-lg">
+                          <p className="text-xs text-red-600 text-center">
+                            {video.analysis_message}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {(!video.analysis_status || video.analysis_status === 'uploaded') && (
+                    <button
+                      onClick={() => startAnalysis(video.id)}
+                      className="flex-1 px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 text-white text-sm rounded-lg hover:from-green-600 hover:to-green-700 transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center"
+                    >
+                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                      분석 시작
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 };

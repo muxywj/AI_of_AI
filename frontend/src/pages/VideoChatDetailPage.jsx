@@ -1,12 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Send, Loader2, CheckCircle, XCircle, RefreshCw, Clock } from 'lucide-react';
+import { Send, CheckCircle, RefreshCw } from 'lucide-react';
 import { api } from '../utils/api';
+import OptimalResponseRenderer from '../components/OptimalResponseRenderer';
+import FrameModal from '../components/FrameModal';
+import AnalysisStatusView from '../components/AnalysisStatusView';
 
 const VideoChatDetailPage = () => {
   const { videoId } = useParams();
   const navigate = useNavigate();
   
+  // 상태 관리
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState('');
@@ -15,11 +19,12 @@ const VideoChatDetailPage = () => {
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [analysisMessage, setAnalysisMessage] = useState('');
   
+  // 프레임 모달 상태
   const [selectedFrame, setSelectedFrame] = useState(null);
   const [isFrameModalOpen, setIsFrameModalOpen] = useState(false);
   const [showBboxOverlay, setShowBboxOverlay] = useState(true);
-  const canvasRef = useRef(null);
   
+  // 스크롤 ref
   const scrollRefs = useRef({
     gpt: null,
     claude: null,
@@ -29,27 +34,7 @@ const VideoChatDetailPage = () => {
 
   const loadingText = isLoading ? "분석중…" : "";
 
-  useEffect(() => {
-    if (videoId) {
-      loadVideoData(videoId);
-    }
-  }, [videoId]);
-
-  useEffect(() => {
-    ['gpt', 'claude', 'mixtral', 'optimal'].forEach(modelId => {
-      scrollToBottomForModel(modelId);
-    });
-  }, [messages]);
-
-  useEffect(() => {
-    if (showBboxOverlay && selectedFrame) {
-      const img = document.getElementById('modal-frame-image');
-      if (img && img.complete) {
-        drawBboxOnCanvas(img, selectedFrame);
-      }
-    }
-  }, [showBboxOverlay, selectedFrame]);
-
+  // 스크롤 함수
   const scrollToBottomForModel = (modelId) => {
     const scrollRef = scrollRefs.current[modelId];
     if (scrollRef) {
@@ -57,13 +42,18 @@ const VideoChatDetailPage = () => {
     }
   };
 
+  // 비디오 데이터 로드
   const loadVideoData = async (id) => {
     try {
       const response = await api.get(`/api/video/${id}/analysis/`);
-      setSelectedVideo(response.data);
-      setAnalysisStatus(response.data.analysis_status);
+      const videoData = {
+        ...response.data,
+        id: response.data.video_id || response.data.id
+      };
+      setSelectedVideo(videoData);
+      setAnalysisStatus(videoData.analysis_status);
       
-      if (response.data.analysis_status === 'pending') {
+      if (response.data.analysis_status === 'pending' || response.data.analysis_status === 'analyzing') {
         checkAnalysisStatus(id);
       } else if (response.data.analysis_status === 'completed') {
         loadChatHistory(id);
@@ -73,6 +63,7 @@ const VideoChatDetailPage = () => {
     }
   };
 
+  // 분석 상태 확인
   const checkAnalysisStatus = async (id) => {
     const interval = setInterval(async () => {
       try {
@@ -102,17 +93,18 @@ const VideoChatDetailPage = () => {
     }, 2000);
   };
 
-  const startAnalysis = async (videoId) => {
+  // 분석 시작
+  const startAnalysis = async () => {
     try {
       setIsLoading(true);
       setAnalysisProgress(0);
       setAnalysisMessage('분석을 시작합니다...');
       
-      const response = await api.post(`/api/video/${videoId}/analysis/`);
+      const response = await api.post(`/api/video/${selectedVideo?.id}/analysis/`);
       
       if (response.data.status === 'pending') {
         setAnalysisStatus('pending');
-        checkAnalysisStatus(videoId);
+        checkAnalysisStatus(selectedVideo.id);
       }
     } catch (error) {
       console.error('분석 시작 실패:', error);
@@ -122,6 +114,7 @@ const VideoChatDetailPage = () => {
     }
   };
 
+  // 채팅 히스토리 로드
   const loadChatHistory = async (id) => {
     try {
       const response = await api.get(`/api/video/${id}/chat/`);
@@ -131,6 +124,7 @@ const VideoChatDetailPage = () => {
     }
   };
 
+  // 메시지 전송
   const handleSendMessage = async () => {
     if (!inputMessage.trim() || !selectedVideo) return;
 
@@ -146,11 +140,20 @@ const VideoChatDetailPage = () => {
     setIsLoading(true);
 
     try {
-      const response = await api.post(`/api/video/${selectedVideo.video_id}/chat/`, {
+      const response = await api.post(`/api/video/${selectedVideo.id}/chat/`, {
         message: inputMessage
       });
 
-      if (response.data.ai_responses) {
+      if (response.data.message_type === 'special_command') {
+        const aiMessage = {
+          id: `special_${Date.now()}`,
+          type: 'ai_optimal',
+          content: response.data.message,
+          created_at: new Date().toISOString(),
+          relevant_frames: []
+        };
+        setMessages(prev => [...prev, aiMessage]);
+      } else if (response.data.ai_responses) {
         const aiMessages = [];
         
         if (response.data.ai_responses.individual) {
@@ -186,316 +189,125 @@ const VideoChatDetailPage = () => {
     }
   };
 
+  // 빠른 액션
+  const handleQuickAction = async (message) => {
+    if (!selectedVideo) return;
+    
+    const userMessage = {
+      id: Date.now(),
+      type: 'user',
+      content: message,
+      timestamp: new Date().toISOString()
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setIsLoading(true);
+
+    try {
+      const response = await api.post(`/api/video/${selectedVideo.id}/chat/`, {
+        message: message
+      });
+
+      if (response.data.message_type === 'special_command') {
+        const aiMessage = {
+          id: `special_${Date.now()}`,
+          type: 'ai_optimal',
+          content: response.data.message,
+          created_at: new Date().toISOString(),
+          relevant_frames: []
+        };
+        setMessages(prev => [...prev, aiMessage]);
+      } else if (response.data.ai_responses) {
+        const aiMessages = [];
+        
+        if (response.data.ai_responses.individual) {
+          response.data.ai_responses.individual.forEach(aiResponse => {
+            aiMessages.push({
+              id: aiResponse.id,
+              type: 'ai',
+              ai_model: aiResponse.model,
+              content: aiResponse.content,
+              created_at: aiResponse.created_at,
+              relevant_frames: response.data.relevant_frames || []
+            });
+          });
+        }
+        
+        if (response.data.ai_responses.optimal) {
+          aiMessages.push({
+            id: `optimal_${Date.now()}`,
+            type: 'ai_optimal',
+            content: response.data.ai_responses.optimal.content,
+            created_at: response.data.ai_responses.optimal.created_at,
+            relevant_frames: response.data.relevant_frames || []
+          });
+        }
+        
+        setMessages(prev => [...prev, ...aiMessages]);
+      }
+    } catch (error) {
+      console.error('빠른 액션 실행 실패:', error);
+      alert('빠른 액션 실행에 실패했습니다.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 목록으로 돌아가기
   const backToVideoList = () => {
     navigate('/video-chat');
   };
 
-  const drawBboxOnCanvas = (imageElement, frame) => {
-    if (!canvasRef.current || !imageElement) return;
-    
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    
-    canvas.width = imageElement.naturalWidth;
-    canvas.height = imageElement.naturalHeight;
-    
-    ctx.drawImage(imageElement, 0, 0);
-    
-    if (frame.persons && frame.persons.length > 0) {
-      frame.persons.forEach((person, index) => {
-        const bbox = person.bbox || [];
-        if (bbox.length === 4) {
-          const [x1, y1, x2, y2] = bbox;
-          const x = x1 * canvas.width;
-          const y = y1 * canvas.height;
-          const width = (x2 - x1) * canvas.width;
-          const height = (y2 - y1) * canvas.height;
-          
-          ctx.strokeStyle = '#8B4513';
-          ctx.lineWidth = 3;
-          ctx.strokeRect(x, y, width, height);
-          
-          const label = `사람 ${index + 1} (${(person.confidence * 100).toFixed(1)}%)`;
-          ctx.font = '16px Arial';
-          const textWidth = ctx.measureText(label).width;
-          ctx.fillStyle = '#8B4513';
-          ctx.fillRect(x, y - 25, textWidth + 10, 25);
-          
-          ctx.fillStyle = '#FFFFFF';
-          ctx.fillText(label, x + 5, y - 7);
-        }
-      });
-    }
-    
-    if (frame.objects && frame.objects.length > 0) {
-      frame.objects.forEach((obj) => {
-        const bbox = obj.bbox || [];
-        if (bbox.length === 4) {
-          const [x1, y1, x2, y2] = bbox;
-          const x = x1 * canvas.width;
-          const y = y1 * canvas.height;
-          const width = (x2 - x1) * canvas.width;
-          const height = (y2 - y1) * canvas.height;
-          
-          ctx.strokeStyle = '#FF8C00';
-          ctx.lineWidth = 3;
-          ctx.strokeRect(x, y, width, height);
-          
-          const label = `${obj.class} (${(obj.confidence * 100).toFixed(1)}%)`;
-          ctx.font = '16px Arial';
-          const textWidth = ctx.measureText(label).width;
-          ctx.fillStyle = '#FF8C00';
-          ctx.fillRect(x, y - 25, textWidth + 10, 25);
-          
-          ctx.fillStyle = '#FFFFFF';
-          ctx.fillText(label, x + 5, y - 7);
-        }
-      });
-    }
+  // 프레임 클릭 핸들러
+  const handleFrameClick = (frame) => {
+    setSelectedFrame(frame);
+    setIsFrameModalOpen(true);
   };
 
-  const OptimalResponseRenderer = ({ content, relevantFrames }) => {
-    const parseOptimalResponse = (text) => {
-      if (!text || typeof text !== 'string') return {};
-      
-      const sections = {};
-      const lines = text.split('\n');
-      let currentSection = '';
-      let currentContent = [];
-      
-      for (const line of lines) {
-        if (line.startsWith('## 통합 답변') || line.startsWith('## 🎯 통합 답변')) {
-          if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
-          currentSection = 'integrated';
-          currentContent = [];
-        } else if (line.startsWith('## 각 AI 분석') || line.startsWith('## 📊 각 AI 분석')) {
-          if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
-          currentSection = 'analysis';
-          currentContent = [];
-        } else if (line.startsWith('## 분석 근거') || line.startsWith('## 📝 분석 근거')) {
-          if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
-          currentSection = 'rationale';
-          currentContent = [];
-        } else if (line.startsWith('## 최종 추천') || line.startsWith('## 🏆 최종 추천')) {
-          if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
-          currentSection = 'recommendation';
-          currentContent = [];
-        } else if (line.startsWith('## 추가 인사이트') || line.startsWith('## 💡 추가 인사이트')) {
-          if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
-          currentSection = 'insights';
-          currentContent = [];
-        } else if (line.trim() !== '') {
-          currentContent.push(line);
-        }
-      }
-      
-      if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
-      return sections;
-    };
-
-    const parseAIAnalysis = (analysisText) => {
-      const analyses = {};
-      const lines = analysisText.split('\n');
-      let currentAI = '';
-      let currentAnalysis = { pros: [], cons: [] };
-      
-      for (const line of lines) {
-        if (line.startsWith('### ')) {
-          if (currentAI) analyses[currentAI] = currentAnalysis;
-          currentAI = line.replace('### ', '').trim();
-          currentAnalysis = { pros: [], cons: [] };
-        } else if (line.includes('- 장점:')) {
-          currentAnalysis.pros.push(line.replace('- 장점:', '').trim());
-        } else if (line.includes('- 단점:')) {
-          currentAnalysis.cons.push(line.replace('- 단점:', '').trim());
-        }
-      }
-      
-      if (currentAI) analyses[currentAI] = currentAnalysis;
-      return analyses;
-    };
-
-    if (!content || typeof content !== 'string') {
-      return (
-        <div className="optimal-response-container">
-          <div className="optimal-section integrated-answer">
-            <h3 className="section-title">최적 답변</h3>
-            <div className="section-content">최적의 답변을 생성 중입니다...</div>
-          </div>
-        </div>
-      );
+  // 컴포넌트 마운트 시 초기화
+  useEffect(() => {
+    if (videoId) {
+      loadVideoData(videoId);
     }
+  }, [videoId]);
 
-    const sections = parseOptimalResponse(content);
-    const analysisData = sections.analysis ? parseAIAnalysis(sections.analysis) : {};
+  // 메시지 변경 시 스크롤
+  useEffect(() => {
+    ['gpt', 'claude', 'mixtral', 'optimal'].forEach(modelId => {
+      scrollToBottomForModel(modelId);
+    });
+  }, [messages]);
 
+  // 분석 중인 경우 주기적으로 상태 업데이트
+  useEffect(() => {
+    if (selectedVideo && (selectedVideo.analysis_status === 'pending' || selectedVideo.analysis_status === 'analyzing')) {
+      const interval = setInterval(() => {
+        loadVideoData(selectedVideo.id);
+      }, 3000);
+
+      return () => clearInterval(interval);
+    }
+  }, [selectedVideo]);
+
+  // 분석 상태에 따른 렌더링
+  if (analysisStatus !== 'completed') {
     return (
-      <div className="optimal-response-container">
-        {sections.integrated && (
-          <div className="optimal-section integrated-answer">
-            <h3 className="section-title">최적 답변</h3>
-            <div className="section-content">{sections.integrated}</div>
-          </div>
-        )}
-        
-        {sections.analysis && (
-          <div className="optimal-section analysis-section">
-            <h3 className="section-title">각 AI 분석</h3>
-            <div className="analysis-grid">
-              {Object.entries(analysisData).map(([aiName, analysis]) => (
-                <div key={aiName} className="analysis-item">
-                  <h4 className="analysis-ai-name">{aiName}</h4>
-                  {analysis.pros.length > 0 && (
-                    <div className="analysis-pros">
-                      <strong>장점:</strong>
-                      <ul>
-                        {analysis.pros.map((pro, index) => (
-                          <li key={index}>{pro}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {analysis.cons.length > 0 && (
-                    <div className="analysis-cons">
-                      <strong>단점:</strong>
-                      <ul>
-                        {analysis.cons.map((con, index) => (
-                          <li key={index}>{con}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        
-        {sections.rationale && (
-          <div className="optimal-section rationale-section">
-            <h3 className="section-title">분석 근거</h3>
-            <div className="section-content">{sections.rationale}</div>
-          </div>
-        )}
-        
-        {sections.recommendation && (
-          <div className="optimal-section recommendation-section">
-            <h3 className="section-title">최종 추천</h3>
-            <div className="section-content">{sections.recommendation}</div>
-          </div>
-        )}
-        
-        {sections.insights && (
-          <div className="optimal-section insights-section">
-            <h3 className="section-title">추가 인사이트</h3>
-            <div className="section-content">{sections.insights}</div>
-          </div>
-        )}
-
-        {relevantFrames && relevantFrames.length > 0 && (
-          <div className="optimal-section frames-section">
-            <h3 className="section-title">관련 프레임</h3>
-            <div className="frames-grid">
-              {relevantFrames.map((frame, index) => (
-                <div key={index} className="frame-card">
-                  <div className="frame-info">
-                    <span className="frame-timestamp">{frame.timestamp.toFixed(1)}초</span>
-                    <span className="frame-score">{frame.relevance_score}점</span>
-                  </div>
-                  <img
-                    src={`${api.defaults.baseURL}${frame.image_url}`}
-                    alt={`프레임 ${frame.image_id}`}
-                    className="frame-image"
-                    onError={(e) => {
-                      console.error(`프레임 이미지 로드 실패: ${frame.image_url}`);
-                      e.target.style.display = 'none';
-                    }}
-                  />
-                  <div className="frame-tags">
-                    {frame.persons && frame.persons.length > 0 && (
-                      <span className="frame-tag person-tag">
-                        사람 {frame.persons.length}명
-                      </span>
-                    )}
-                    {frame.objects && frame.objects.length > 0 && (
-                      <span className="frame-tag object-tag">
-                        객체 {frame.objects.length}개
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+      <div className="min-h-screen bg-gray-50">
+        <div className="max-w-2xl mx-auto p-6">
+          <AnalysisStatusView
+            status={analysisStatus}
+            progress={analysisProgress}
+            message={analysisMessage}
+            onRetry={startAnalysis}
+            onBackToList={backToVideoList}
+          />
+        </div>
       </div>
     );
-  };
+  }
 
-  const renderAnalysisStatus = () => {
-    switch (analysisStatus) {
-      case 'pending':
-        return (
-          <div className="flex flex-col items-center justify-center h-64 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
-            <Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-4" />
-            <h3 className="text-xl font-semibold text-gray-700 mb-2">영상 분석 중</h3>
-            <p className="text-gray-600 text-center mb-4 max-w-md">
-              {analysisMessage || '영상을 분석하고 있습니다...'}
-            </p>
-            <div className="w-full max-w-sm mb-4">
-              <div className="flex justify-between text-sm text-gray-600 mb-2">
-                <span className="font-medium">진행률</span>
-                <span className="font-semibold text-blue-600">{analysisProgress}%</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-3 shadow-inner">
-                <div 
-                  className="bg-gradient-to-r from-blue-500 to-blue-600 h-3 rounded-full transition-all duration-500 ease-out shadow-sm" 
-                  style={{ width: `${analysisProgress}%` }}
-                ></div>
-              </div>
-            </div>
-            <div className="flex items-center text-sm text-gray-500">
-              <Clock className="w-4 h-4 mr-1" />
-              <span>분석이 완료되면 자동으로 채팅이 시작됩니다</span>
-            </div>
-          </div>
-        );
-      case 'failed':
-        return (
-          <div className="flex flex-col items-center justify-center h-64 bg-gradient-to-br from-red-50 to-pink-50 rounded-lg border border-red-200">
-            <XCircle className="w-12 h-12 text-red-500 mb-4" />
-            <h3 className="text-xl font-semibold text-red-700 mb-2">분석 실패</h3>
-            <div className="text-center mb-6 max-w-md">
-              <p className="text-red-600 mb-2">
-                {analysisMessage || '영상 분석에 실패했습니다.'}
-              </p>
-              <p className="text-sm text-gray-600">
-                가능한 원인: 파일 형식 미지원, 파일 크기 초과, 파일 손상, 서버 오류
-              </p>
-            </div>
-            <div className="flex gap-3">
-              <button
-                onClick={() => startAnalysis(selectedVideo?.id)}
-                className="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors flex items-center"
-              >
-                <RefreshCw className="w-4 h-4 mr-2" />
-                다시 분석
-              </button>
-              <button
-                onClick={backToVideoList}
-                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
-              >
-                영상 목록으로
-              </button>
-            </div>
-          </div>
-        );
-      default:
-        return null;
-    }
-  };
-
-  const renderChatInterface = () => (
+  // 채팅 인터페이스 렌더링
+  return (
     <div className="min-h-screen bg-gray-50">
       <style>{`
         .chat-header {
@@ -638,6 +450,7 @@ const VideoChatDetailPage = () => {
         }
       `}</style>
 
+      {/* 헤더 */}
       <div className="chat-header flex items-center justify-between px-6">
         <div className="flex items-center">
           <button
@@ -661,6 +474,7 @@ const VideoChatDetailPage = () => {
         </div>
       </div>
 
+      {/* 메시지 영역 */}
       <div className="chat-container flex overflow-hidden h-full">
         {['gpt', 'claude', 'mixtral', 'optimal'].map((modelId) => (
           <div key={modelId} className="border-r flex-1 flex flex-col chat-column">
@@ -684,16 +498,31 @@ const VideoChatDetailPage = () => {
                 const isUser = message.type === 'user';
                 const isOptimal = modelId === 'optimal' && message.type === 'ai_optimal';
                 const isModelMessage = modelId !== 'optimal' && message.ai_model === modelId;
+                const isSpecialCommand = message.type === 'ai_optimal' && message.id && message.id.startsWith('special_');
+                
+                if (isSpecialCommand) {
+                  return (
+                    <div key={`${modelId}-${index}`} className="flex justify-start mb-4">
+                      <div className="aiofai-bot-message optimal-response">
+                        <div className="whitespace-pre-wrap">{message.content}</div>
+                        <div className="text-xs opacity-60 mt-2">
+                          {message.created_at ? new Date(message.created_at).toLocaleTimeString() : new Date().toLocaleTimeString()}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
                 
                 if (!isUser && !isOptimal && !isModelMessage) return null;
                 
                 return (
                   <div key={`${modelId}-${index}`} className={`flex ${isUser ? "justify-end" : "justify-start"} mb-4`}>
-                    <div className={`${isUser ? "aiofai-user-message" : "aiofai-bot-message"} ${isOptimal ? "optimal-response" : ""}`}>
-                      {isOptimal ? (
+                    <div className={`${isUser ? "aiofai-user-message" : "aiofai-bot-message"} ${isOptimal || isSpecialCommand ? "optimal-response" : ""}`}>
+                      {isOptimal || isSpecialCommand ? (
                         <OptimalResponseRenderer 
                           content={message.content} 
                           relevantFrames={message.relevant_frames}
+                          onFrameClick={handleFrameClick}
                         />
                       ) : (
                         <div>
@@ -701,7 +530,10 @@ const VideoChatDetailPage = () => {
                           
                           {message.relevant_frames && message.relevant_frames.length > 0 && (
                             <div className="mt-4">
-                              <div className="text-sm font-semibold text-gray-700 mb-3">
+                              <div className="text-sm font-semibold text-gray-700 mb-3 flex items-center">
+                                <svg className="w-4 h-4 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                </svg>
                                 관련 프레임 ({message.relevant_frames.length}개)
                               </div>
                               <div className="grid grid-cols-1 gap-3">
@@ -709,10 +541,7 @@ const VideoChatDetailPage = () => {
                                   <div 
                                     key={frameIndex} 
                                     className="group relative bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-lg hover:border-blue-300 transition-all duration-300 cursor-pointer"
-                                    onClick={() => {
-                                      setSelectedFrame(frame);
-                                      setIsFrameModalOpen(true);
-                                    }}
+                                    onClick={() => handleFrameClick(frame)}
                                   >
                                     <div className="relative">
                                       <img
@@ -739,9 +568,15 @@ const VideoChatDetailPage = () => {
                                       <div className="flex items-center justify-between mb-2">
                                         <div className="flex items-center space-x-2">
                                           <div className="flex items-center bg-blue-50 text-blue-700 px-2 py-1 rounded-full text-xs font-medium">
+                                            <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                            </svg>
                                             {frame.timestamp.toFixed(1)}초
                                           </div>
                                           <div className="flex items-center bg-green-50 text-green-700 px-2 py-1 rounded-full text-xs font-medium">
+                                            <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                            </svg>
                                             {frame.relevance_score}점
                                           </div>
                                         </div>
@@ -753,10 +588,16 @@ const VideoChatDetailPage = () => {
                                       {frame.persons && frame.persons.length > 0 && (
                                         <div className="flex items-center space-x-2">
                                           <div className="flex items-center bg-purple-50 text-purple-700 px-2 py-1 rounded-full text-xs font-medium">
+                                            <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                            </svg>
                                             사람 {frame.persons.length}명
                                           </div>
                                           {frame.objects && frame.objects.length > 0 && (
                                             <div className="flex items-center bg-orange-50 text-orange-700 px-2 py-1 rounded-full text-xs font-medium">
+                                              <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                                              </svg>
                                               객체 {frame.objects.length}개
                                             </div>
                                           )}
@@ -770,7 +611,7 @@ const VideoChatDetailPage = () => {
                           )}
                           
                           <div className="text-xs opacity-60 mt-2">
-                            {new Date(message.created_at).toLocaleTimeString()}
+                            {message.created_at ? new Date(message.created_at).toLocaleTimeString() : new Date().toLocaleTimeString()}
                           </div>
                         </div>
                       )}
@@ -794,6 +635,85 @@ const VideoChatDetailPage = () => {
         ))}
       </div>
 
+      {/* 빠른 액션 버튼들 */}
+      <div className="px-6 py-3 bg-white/50 backdrop-blur-sm border-t border-gray-200">
+        <div className="flex space-x-3 mb-3">
+          <button
+            onClick={() => handleQuickAction('영상 요약해줘')}
+            className="px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white text-sm rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all duration-200 shadow-md hover:shadow-lg flex items-center"
+          >
+            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            영상 요약
+          </button>
+          <button
+            onClick={() => handleQuickAction('영상 하이라이트 알려줘')}
+            className="px-4 py-2 bg-gradient-to-r from-purple-500 to-purple-600 text-white text-sm rounded-lg hover:from-purple-600 hover:to-purple-700 transition-all duration-200 shadow-md hover:shadow-lg flex items-center"
+          >
+            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            하이라이트
+          </button>
+          <button
+            onClick={() => handleQuickAction('간단한 요약')}
+            className="px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 text-white text-sm rounded-lg hover:from-green-600 hover:to-green-700 transition-all duration-200 shadow-md hover:shadow-lg flex items-center"
+          >
+            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            간단 요약
+          </button>
+        <button
+          onClick={() => handleQuickAction('상세한 요약')}
+          className="px-4 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white text-sm rounded-lg hover:from-orange-600 hover:to-orange-700 transition-all duration-200 shadow-md hover:shadow-lg flex items-center"
+        >
+          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+          </svg>
+          상세 요약
+        </button>
+        <button
+          onClick={() => handleQuickAction('사람 찾아줘')}
+          className="px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 text-white text-sm rounded-lg hover:from-red-600 hover:to-red-700 transition-all duration-200 shadow-md hover:shadow-lg flex items-center"
+        >
+          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          사람 찾기
+        </button>
+        <button
+          onClick={() => handleQuickAction('비가오는 밤 영상 찾아줘')}
+          className="px-4 py-2 bg-gradient-to-r from-indigo-500 to-indigo-600 text-white text-sm rounded-lg hover:from-indigo-600 hover:to-indigo-700 transition-all duration-200 shadow-md hover:shadow-lg flex items-center"
+        >
+          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
+          </svg>
+          비오는 밤
+        </button>
+        <button
+          onClick={() => handleQuickAction('주황색 상의 남성 찾아줘')}
+          className="px-4 py-2 bg-gradient-to-r from-yellow-500 to-yellow-600 text-white text-sm rounded-lg hover:from-yellow-600 hover:to-yellow-700 transition-all duration-200 shadow-md hover:shadow-lg flex items-center"
+        >
+          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+          </svg>
+          주황 옷 남성
+        </button>
+        <button
+          onClick={() => handleQuickAction('3:00-5:00 성비 분포 알려줘')}
+          className="px-4 py-2 bg-gradient-to-r from-pink-500 to-pink-600 text-white text-sm rounded-lg hover:from-pink-600 hover:to-pink-700 transition-all duration-200 shadow-md hover:shadow-lg flex items-center"
+        >
+          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+          </svg>
+          성비 분석
+        </button>
+        </div>
+      </div>
+
+      {/* 입력 영역 */}
       <div className="aiofai-input-area">
         <div className="flex space-x-3">
           <input
@@ -814,169 +734,15 @@ const VideoChatDetailPage = () => {
           </button>
         </div>
       </div>
-    </div>
-  );
 
-  return (
-    <div className="min-h-screen bg-gray-50">
-      {analysisStatus === 'completed' ? (
-        renderChatInterface()
-      ) : (
-        <div className="max-w-2xl mx-auto p-6">
-          {renderAnalysisStatus()}
-        </div>
-      )}
-      
-      {isFrameModalOpen && selectedFrame && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl max-w-4xl max-h-[90vh] overflow-auto shadow-2xl">
-            <div className="flex items-center justify-between p-4 border-b bg-gray-50 sticky top-0 z-10">
-              <div className="flex items-center space-x-3">
-                <div className="flex items-center bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-sm font-medium">
-                  {selectedFrame.timestamp.toFixed(1)}초
-                </div>
-                <div className="flex items-center bg-green-50 text-green-700 px-3 py-1 rounded-full text-sm font-medium">
-                  {selectedFrame.relevance_score}점
-                </div>
-                <div className="text-sm text-gray-600">
-                  프레임 #{selectedFrame.image_id}
-                </div>
-              </div>
-              <button
-                onClick={() => setIsFrameModalOpen(false)}
-                className="p-2 hover:bg-gray-200 rounded-full transition-colors"
-              >
-                <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            
-            <div className="p-6">
-              <div className="flex flex-col lg:flex-row gap-6">
-                <div className="flex-1">
-                  <div className="relative">
-                    <div className="absolute top-2 right-2 z-10">
-                      <button
-                        onClick={() => setShowBboxOverlay(!showBboxOverlay)}
-                        className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                          showBboxOverlay
-                            ? 'bg-blue-500 text-white'
-                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                        }`}
-                      >
-                        {showBboxOverlay ? 'bbox ON' : 'bbox OFF'}
-                      </button>
-                    </div>
-                    
-                    {showBboxOverlay ? (
-                      <canvas
-                        ref={canvasRef}
-                        className="w-full h-auto max-h-[60vh] object-contain rounded-lg shadow-lg"
-                      />
-                    ) : (
-                      <img
-                        src={`${api.defaults.baseURL}${selectedFrame.image_url}`}
-                        alt={`프레임 ${selectedFrame.image_id}`}
-                        className="w-full h-auto max-h-[60vh] object-contain rounded-lg shadow-lg"
-                        onError={(e) => {
-                          console.error(`프레임 이미지 로드 실패: ${selectedFrame.image_url}`);
-                          e.target.style.display = 'none';
-                        }}
-                      />
-                    )}
-                    
-                    <img
-                      id="modal-frame-image"
-                      src={`${api.defaults.baseURL}${selectedFrame.image_url}`}
-                      alt={`프레임 ${selectedFrame.image_id}`}
-                      style={{ display: 'none' }}
-                      onLoad={(e) => {
-                        if (showBboxOverlay) {
-                          drawBboxOnCanvas(e.target, selectedFrame);
-                        }
-                      }}
-                      onError={(e) => {
-                        console.error(`프레임 이미지 로드 실패: ${selectedFrame.image_url}`);
-                      }}
-                    />
-                  </div>
-                </div>
-                
-                <div className="lg:w-80 space-y-4">
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-800 mb-3">프레임 정보</h3>
-                    <div className="space-y-2">
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">타임스탬프:</span>
-                        <span className="font-medium">{selectedFrame.timestamp.toFixed(1)}초</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">관련도 점수:</span>
-                        <span className="font-medium text-green-600">{selectedFrame.relevance_score}점</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">프레임 ID:</span>
-                        <span className="font-medium">#{selectedFrame.image_id}</span>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  {selectedFrame.persons && selectedFrame.persons.length > 0 && (
-                    <div>
-                      <h4 className="text-md font-semibold text-gray-800 mb-2">
-                        감지된 사람 ({selectedFrame.persons.length}명)
-                      </h4>
-                      <div className="space-y-2">
-                        {selectedFrame.persons.map((person, index) => (
-                          <div key={index} className="bg-purple-50 rounded-lg p-3">
-                            <div className="flex justify-between items-center mb-2">
-                              <span className="text-sm font-medium text-purple-800">사람 {index + 1}</span>
-                              <span className="text-xs bg-purple-200 text-purple-800 px-2 py-1 rounded-full">
-                                신뢰도 {(person.confidence * 100).toFixed(1)}%
-                              </span>
-                            </div>
-                            {person.attributes && (
-                              <div className="text-xs text-gray-600 space-y-1">
-                                {person.attributes.gender && (
-                                  <div>성별: {person.attributes.gender.value}</div>
-                                )}
-                                {person.attributes.age && (
-                                  <div>나이: {person.attributes.age.value}</div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  
-                  {selectedFrame.objects && selectedFrame.objects.length > 0 && (
-                    <div>
-                      <h4 className="text-md font-semibold text-gray-800 mb-2">
-                        감지된 객체 ({selectedFrame.objects.length}개)
-                      </h4>
-                      <div className="space-y-2">
-                        {selectedFrame.objects.map((obj, index) => (
-                          <div key={index} className="bg-orange-50 rounded-lg p-3">
-                            <div className="flex justify-between items-center">
-                              <span className="text-sm font-medium text-orange-800">{obj.class}</span>
-                              <span className="text-xs bg-orange-200 text-orange-800 px-2 py-1 rounded-full">
-                                신뢰도 {(obj.confidence * 100).toFixed(1)}%
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 프레임 모달 */}
+      <FrameModal
+        frame={selectedFrame}
+        isOpen={isFrameModalOpen}
+        onClose={() => setIsFrameModalOpen(false)}
+        showBboxOverlay={showBboxOverlay}
+        setShowBboxOverlay={setShowBboxOverlay}
+      />
     </div>
   );
 };
