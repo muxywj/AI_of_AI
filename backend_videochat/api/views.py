@@ -2737,6 +2737,34 @@ def delete_video(request, pk):
         }, status=500)
 
 @csrf_exempt
+@require_http_methods(["POST", "PATCH"])
+def rename_video(request, pk):
+    """비디오 이름 변경"""
+    try:
+        video = get_object_or_404(Video, id=pk)
+        
+        data = json.loads(request.body)
+        new_name = data.get('original_name') or data.get('title')
+        
+        if not new_name or not new_name.strip():
+            return JsonResponse({'error': '새 이름을 입력해주세요.'}, status=400)
+        
+        video.original_name = new_name.strip()
+        video.save()
+        
+        return JsonResponse({
+            'success': True,
+            'message': '이름이 변경되었습니다.',
+            'video': {
+                'id': video.id,
+                'original_name': video.original_name
+            }
+        })
+    except Video.DoesNotExist:
+        return JsonResponse({'error': '비디오를 찾을 수 없습니다.'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+@csrf_exempt
 @require_http_methods(["GET"])  
 def video_detail(request, video_id):
     """비디오 상세 정보 조회 (존재 여부 확인용)"""

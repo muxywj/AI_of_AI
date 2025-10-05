@@ -8,6 +8,7 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/", include("api.urls")),
     path("clip/", include("api.clip_urls")),  # 클립 전용 URL
+    path('videos/<int:pk>/rename/', views.rename_video),
 ]
 
 # 미디어 파일 서빙 (개발 환경에서만)

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, Loader2, CheckCircle, XCircle, Clock, FileVideo, RefreshCw } from 'lucide-react';
+import { Upload, Loader2, CheckCircle, XCircle, Clock, FileVideo, RefreshCw, EllipsisVertical, Pencil, Trash2 } from 'lucide-react';
 import { api } from '../utils/api';
 
 const BRAND = '#5d7c5b';
@@ -9,7 +9,34 @@ const BRAND_HOVER = '#5d7c5b';           // 버튼 hover
 const BRAND_TINT_BG = 'rgba(139, 168, 138, 0.05)';   // 드롭존 hover 배경
 const BRAND_TINT_BORDER = 'rgba(139, 168, 138, 0.4)';// 드롭존 hover 보더
 const NEUTRAL_BORDER = '#e5e7eb';
-
+const showToast = (message, type = 'success') => {
+    try {
+      const toast = document.createElement('div');
+      const isSuccess = type === 'success';
+      const bg = isSuccess ? '#16a34a' : '#ef4444';   // green-600 / red-500
+      const iconPath = isSuccess
+        ? 'M5 13l4 4L19 7'                            // check
+        : 'M6 18L18 6M6 6l12 12';                    // x
+  
+      toast.className =
+        'fixed top-4 right-4 text-white px-6 py-3 rounded-lg shadow-lg z-[9999] flex items-center max-w-md';
+      toast.style.backgroundColor = bg;
+      toast.innerHTML = `
+        <svg class="w-5 h-5 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${iconPath}"></path>
+        </svg>
+        <span>${message}</span>
+      `;
+      document.body.appendChild(toast);
+  
+      setTimeout(() => {
+        try { toast.remove(); } catch {}
+      }, isSuccess ? 3000 : 5000);
+    } catch {
+      // DOM 사용 불가 환경 대비 폴백
+      alert(message);
+    }
+  };
 const VideoListPage = () => {
   const navigate = useNavigate();
   
@@ -18,8 +45,62 @@ const VideoListPage = () => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isHover, setIsHover] = useState(false);
+const [menuOpenId, setMenuOpenId] = useState(null);
+const menuRef = React.useRef(null);
 
-  // 비디오 목록 로드
+// 바깥 클릭으로 메뉴 닫기
+useEffect(() => {
+  const onDocClick = (e) => {
+    if (!menuRef.current) return;
+    if (!menuRef.current.contains(e.target)) {
+      setMenuOpenId(null);
+    }
+  };
+  document.addEventListener('mousedown', onDocClick);
+  return () => document.removeEventListener('mousedown', onDocClick);
+}, []);
+
+// 이름 수정
+const handleRename = async (video) => {
+    const current = video.original_name || '';
+    const newName = window.prompt('새 이름을 입력하세요', current);
+    if (!newName || newName.trim() === '' || newName === current) {
+      setMenuOpenId(null);
+      return;
+    }
+    
+    try {
+      await api.post(`/api/video/${video.id}/rename/`, { original_name: newName.trim() });
+      showToast('이름이 변경되었습니다.', 'success');
+      await loadVideoList();
+    } catch (err) {
+      console.error('이름 변경 실패:', err);
+      const errorMsg = err?.response?.data?.error || err?.response?.data?.message || err?.message || '이름 변경에 실패했습니다.';
+      showToast(errorMsg, 'error');
+    } finally {
+      setMenuOpenId(null);
+    }
+  };
+
+// 영상 삭제
+const handleDelete = async (video) => {
+    if (!window.confirm('정말로 이 영상을 삭제하시겠습니까? 되돌릴 수 없습니다.')) {
+      setMenuOpenId(null);
+      return;
+    }
+    
+    try {
+      await api.delete(`/api/video/${video.id}/delete/`);
+      showToast('영상이 삭제되었습니다.', 'success');
+      await loadVideoList();
+    } catch (err) {
+      console.error('영상 삭제 실패:', err);
+      const errorMsg = err?.response?.data?.error || err?.response?.data?.message || err?.message || '영상 삭제에 실패했습니다.';
+      showToast(errorMsg, 'error');
+    } finally {
+      setMenuOpenId(null);
+    }
+  };
   const loadVideoList = async () => {
     try {
       const response = await api.get('/api/video/list/');
@@ -28,7 +109,6 @@ const VideoListPage = () => {
       console.error('비디오 목록 로드 실패:', error);
     }
   };
-
   // 분석 시작하기
   const startAnalysis = async (videoId) => {
     try {
@@ -370,20 +450,58 @@ const VideoListPage = () => {
               {videoList.map((video) => (
                 <div
                   key={video.id}
-                  className="bg-white rounded-lg shadow-md p-4 hover:shadow-lg transition-shadow border"
+                  className="relative bg-white rounded-lg shadow-md p-4 hover:shadow-lg transition-shadow border"
                 >
-                  <div className="flex items-center mb-3">
-                    <FileVideo className="w-8 h-8 mr-3" style={{ color: BRAND }} />
-                    <div className="flex-1 min-w-0">
-                      <h3 className="font-medium text-gray-800 truncate">
+                  <div className="flex items-start mb-3 pr-10">
+                    <FileVideo className="w-8 h-8 mr-3 flex-shrink-0 mt-0.5" style={{ color: BRAND }} />
+                    <div className="flex-1 min-w-0 overflow-hidden">
+                        <h3 className="font-medium text-gray-800 truncate block">
                         {video.original_name}
-                      </h3>
-                      <p className="text-sm text-gray-500">
+                        </h3>
+                        <p className="text-sm text-gray-500">
                         {new Date(video.uploaded_at).toLocaleDateString()}
-                      </p>
+                        </p>
                     </div>
-                  </div>
-                  
+                    </div>
+                  {/* 더보기 (…) 버튼 */}
+                <button
+                type="button"
+                aria-label="더보기"
+                className="absolute top-3 right-3 p-2 rounded-md hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-200"
+                onClick={(e) => {
+                    e.stopPropagation();
+                    setMenuOpenId(menuOpenId === video.id ? null : video.id);
+                }}
+                >
+                <EllipsisVertical className="w-5 h-5" style={{ color: '#6b7280' }} />
+                </button>
+
+                {/* 드롭다운 메뉴 */}
+                {menuOpenId === video.id && (
+                <div
+                    ref={menuRef}
+                    className="absolute top-10 right-3 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-20 overflow-hidden"
+                    onClick={(e) => e.stopPropagation()}
+                    role="menu"
+                >
+                    <button
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-black-50 flex items-center gap-2"
+                    onClick={() => handleRename(video)}
+                    role="menuitem"
+                    >
+                    <Pencil className="w-4 h-4 text-black-600" />
+                    <span>이름 수정</span>
+                    </button>
+                    <button
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-black-50 flex items-center gap-2"
+                    onClick={() => handleDelete(video)}
+                    role="menuitem"
+                    >
+                    <Trash2 className="w-4 h-4 text-black-600" />
+                    <span>영상 삭제</span>
+                    </button>
+                </div>
+                )}
                   <div className="flex items-center justify-between text-sm mb-3">
                     <span className="text-gray-500">
                       {(video.file_size / (1024 * 1024)).toFixed(1)}MB

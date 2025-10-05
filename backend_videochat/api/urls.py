@@ -26,6 +26,7 @@ urlpatterns = [
     path('videos/<int:video_id>/summary/', views.VideoSummaryView.as_view()), # 비디오 요약 및 하이라이트
     path('clip/<int:video_id>/<str:timestamp>/', clip_views.ClipPreviewView.as_view(), name='clip_preview'), # 클립 미리보기
     path('test/', views.APIStatusView.as_view()),
+    path('videos/<int:pk>/rename/', views.rename_video),
 ]
 
 ## path("api/", include("api.urls")),
