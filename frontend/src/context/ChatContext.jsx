@@ -18,6 +18,28 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
     }
   }, [initialModels]);
 
+  // 새로고침 시 캐시 초기화 및 대화 맥락 복원
+  useEffect(() => {
+    const initializeChat = async () => {
+      try {
+        // 1. LLM 캐시 초기화 (대화 맥락은 유지)
+        await api.post('/api/cache/clear/', { user_id: 'default_user' });
+        console.log('✅ 새로고침 시 LLM 캐시 초기화 완료');
+        
+        // 2. 대화 맥락 복원
+        const contextResponse = await api.get('/api/cache/context/?user_id=default_user&limit=5');
+        if (contextResponse.data.success && contextResponse.data.context.length > 0) {
+          console.log('✅ 대화 맥락 복원 완료:', contextResponse.data.context.length, '개 대화');
+          // 필요시 대화 맥락을 UI에 표시하거나 활용
+        }
+      } catch (error) {
+        console.warn('⚠️ 채팅 초기화 실패:', error);
+      }
+    };
+
+    initializeChat();
+  }, []); // 컴포넌트 마운트 시 한 번만 실행
+
   const sendMessage = async (messageText, requestId = null, options = {}) => {
     // 파일이 options에 있는 경우 처리
     const filesBase64 = options.filesBase64 || [];
@@ -295,16 +317,22 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
              // optimal 모델 처리 (다른 AI들의 응답을 포함하여)
              if (modelsToUpdate.includes('optimal')) {
                try {
-                 const formData = new FormData();
-                 formData.append('message', messageText || '');
+                 // JSON 형태로 데이터 전송 (judge_model 포함)
+                 const requestData = {
+                   message: messageText || '',
+                   user_id: 'default_user',
+                   judge_model: 'GPT-3.5-turbo'  // 기본 심판 모델
+                 };
                  
-                 // other_responses가 있는 경우에만 추가
-                 if (Object.keys(otherResponses).length > 0) {
-                   formData.append('other_responses', JSON.stringify(otherResponses));
-                 }
+                 let response;
                  
-                 // 파일이 있는 경우 FormData에 추가
                  if (hasFiles) {
+                   // 파일이 있는 경우 FormData 사용
+                   const formData = new FormData();
+                   formData.append('message', messageText || '');
+                   formData.append('user_id', 'default_user');
+                   formData.append('judge_model', 'GPT-3.5-turbo');
+                   
                    // 첫 번째 파일만 전송 (백엔드에서 하나씩 처리)
                    const firstFile = filesBase64[0] || imagesBase64[0];
                    if (firstFile) {
@@ -318,13 +346,20 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
                      const blob = new Blob([byteArray], { type: firstFile.type });
                      formData.append('file', blob, firstFile.name);
                    }
+                   
+                   response = await api.post(`/chat/optimal/`, formData, {
+                     headers: {
+                       'Content-Type': 'multipart/form-data',
+                     },
+                   });
+                 } else {
+                   // 파일이 없는 경우 JSON 사용
+                   response = await api.post(`/chat/optimal/`, requestData, {
+                     headers: {
+                       'Content-Type': 'application/json',
+                     },
+                   });
                  }
-
-                 const response = await api.post(`/chat/optimal/`, formData, {
-                   headers: {
-                     'Content-Type': 'multipart/form-data',
-                   },
-                 });
 
           const data = response.data;
           
@@ -406,6 +441,29 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
     }
   };
 
+  // 캐시 통계 조회
+  const getCacheStatistics = async () => {
+    try {
+      const response = await api.get('/api/cache/statistics/?user_id=default_user');
+      return response.data;
+    } catch (error) {
+      console.warn('⚠️ 캐시 통계 조회 실패:', error);
+      return null;
+    }
+  };
+
+  // 대화 맥락 초기화
+  const clearConversationContext = async () => {
+    try {
+      const response = await api.post('/api/cache/context/clear/', { user_id: 'default_user' });
+      console.log('✅ 대화 맥락 초기화 완료');
+      return response.data;
+    } catch (error) {
+      console.warn('⚠️ 대화 맥락 초기화 실패:', error);
+      return null;
+    }
+  };
+
   return (
     <ChatContext.Provider value={{
       selectedModels,
@@ -415,6 +473,8 @@ export const ChatProvider = ({ children, initialModels = [] }) => {
       isLoading,
       loadingModels,
       loadingProgress,
+      getCacheStatistics,
+      clearConversationContext,
       sendMessage
     }}>
       {children}

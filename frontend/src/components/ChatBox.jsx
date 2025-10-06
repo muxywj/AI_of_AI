@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Send, CirclePlus, Image as ImageIcon, File as FileIcon, X, BarChart3 } from "lucide-react";
+import { Send, CirclePlus, Image as ImageIcon, File as FileIcon, X, BarChart3, Settings } from "lucide-react";
 import { useChat } from "../context/ChatContext";
 import SimilarityDetailModal from "./SimilarityDetailModal";
+import { api } from "../utils/api";
 
 // Optimal Response Renderer Component
 const OptimalResponseRenderer = ({ content }) => {
@@ -17,27 +18,28 @@ const OptimalResponseRenderer = ({ content }) => {
     let currentContent = [];
     
     for (const line of lines) {
-             if (line.startsWith('## 통합 답변') || line.startsWith('## 🎯 통합 답변')) {
-               if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
-               currentSection = 'integrated';
-               currentContent = [];
-             } else if (line.startsWith('## 각 AI 분석') || line.startsWith('## 📊 각 AI 분석')) {
-               if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
-               currentSection = 'analysis';
-               currentContent = [];
-             } else if (line.startsWith('## 분석 근거') || line.startsWith('## 🔍 분석 근거')) {
-               if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
-               currentSection = 'rationale';
-               currentContent = [];
-             } else if (line.startsWith('## 최종 추천') || line.startsWith('## 🏆 최종 추천')) {
-               if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
-               currentSection = 'recommendation';
-               currentContent = [];
-             } else if (line.startsWith('## 추가 인사이트') || line.startsWith('## 💡 추가 인사이트')) {
-               if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
-               currentSection = 'insights';
-               currentContent = [];
-             } else if (line.trim() !== '') {
+      // 새로운 간결한 형식 지원
+      if (line.startsWith('**최적 답변:**') || line.startsWith('**최적의 답변:**') || line.startsWith('## 🎯 정확한 답변') || line.startsWith('## 통합 답변') || line.startsWith('## 🎯 통합 답변')) {
+        if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
+        currentSection = 'integrated';
+        currentContent = [];
+      } else if (line.startsWith('## 각 AI 분석') || line.startsWith('## 📊 각 AI 분석') || line.startsWith('**각 AI 분석:**') || line.startsWith('**각 LLM 검증 결과:**')) {
+        if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
+        currentSection = 'analysis';
+        currentContent = [];
+      } else if (line.startsWith('**검증 결과:**') || line.startsWith('## 분석 근거') || line.startsWith('## 🔍 분석 근거') || line.startsWith('## 🔍 검증 결과')) {
+        if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
+        currentSection = 'rationale';
+        currentContent = [];
+      } else if (line.startsWith('## 최종 추천') || line.startsWith('## 🏆 최종 추천')) {
+        if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
+        currentSection = 'recommendation';
+        currentContent = [];
+      } else if (line.startsWith('## 추가 인사이트') || line.startsWith('## 💡 추가 인사이트') || line.startsWith('## ⚠️ 수정된 정보')) {
+        if (currentSection) sections[currentSection] = currentContent.join('\n').trim();
+        currentSection = 'insights';
+        currentContent = [];
+      } else if (line.trim() !== '') {
         currentContent.push(line);
       }
     }
@@ -73,6 +75,76 @@ const OptimalResponseRenderer = ({ content }) => {
     return analyses;
   };
 
+  const parseNewAIAnalysis = (analysisText) => {
+    const analyses = {};
+    const lines = analysisText.split('\n');
+    let currentAI = '';
+    let currentAnalysis = { pros: [], cons: [], confidence: 0, warnings: [] };
+    
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      
+      // 새로운 형식: **GPT-3.5 Turbo:**, **Claude-3.5 Haiku:**, **Llama 3.1 8B:**
+      if (trimmedLine.startsWith('**') && trimmedLine.endsWith(':**')) {
+        // 이전 AI 분석 저장
+        if (currentAI) {
+          analyses[currentAI] = currentAnalysis;
+        }
+        
+        // 새 AI 시작
+        currentAI = trimmedLine.replace(/\*\*/g, '').replace(':**', '');
+        currentAnalysis = { pros: [], cons: [], confidence: 0, warnings: [] };
+      } else if (trimmedLine.includes('✅ 정확성:')) {
+        // 새로운 형식: ✅ 정확성: ✅ 또는 ❌
+        const accuracy = trimmedLine.replace('✅ 정확성:', '').trim();
+        if (accuracy === '✅') {
+          currentAnalysis.pros = ['정확한 정보 제공'];
+        } else {
+          currentAnalysis.pros = [];
+        }
+      } else if (trimmedLine.includes('❌ 오류:')) {
+        // 새로운 형식: ❌ 오류: 오류 없음 또는 구체적인 오류 설명
+        const error = trimmedLine.replace('❌ 오류:', '').trim();
+        if (error && error !== '오류 없음') {
+          currentAnalysis.cons = [error];
+        } else {
+          currentAnalysis.cons = [];
+        }
+      } else if (trimmedLine.includes('✅ 정확한 정보:')) {
+        const info = trimmedLine.replace('✅ 정확한 정보:', '').trim();
+        if (info && info !== '기본 정보 제공') {
+          currentAnalysis.pros = info.split(',').map(i => i.trim()).filter(i => i.length > 0);
+        } else {
+          currentAnalysis.pros = ['기본 정보 제공'];
+        }
+      } else if (trimmedLine.includes('❌ 틀린 정보:')) {
+        const info = trimmedLine.replace('❌ 틀린 정보:', '').trim();
+        if (info && info !== '없음') {
+          currentAnalysis.cons = info.split(',').map(i => i.trim()).filter(i => i.length > 0);
+        } else {
+          currentAnalysis.cons = [];
+        }
+      } else if (trimmedLine.includes('📊 신뢰도:')) {
+        const confidenceMatch = trimmedLine.match(/📊 신뢰도: (\d+)%/);
+        if (confidenceMatch) {
+          currentAnalysis.confidence = parseInt(confidenceMatch[1]);
+        }
+      } else if (trimmedLine.includes('⚠️ 충돌 경고:')) {
+        const info = trimmedLine.replace('⚠️ 충돌 경고:', '').trim();
+        if (info) {
+          currentAnalysis.warnings = info.split(',').map(i => i.trim()).filter(i => i.length > 0);
+        }
+      }
+    }
+    
+    // 마지막 AI 분석 저장
+    if (currentAI) {
+      analyses[currentAI] = currentAnalysis;
+    }
+    
+    return analyses;
+  };
+
   // content가 없으면 기본 메시지 표시
   if (!content || typeof content !== 'string') {
     return (
@@ -90,7 +162,7 @@ const OptimalResponseRenderer = ({ content }) => {
   }
 
   const sections = parseOptimalResponse(content);
-  const analysisData = sections.analysis ? parseAIAnalysis(sections.analysis) : {};
+  const analysisData = sections.analysis ? parseNewAIAnalysis(sections.analysis) : {};
 
   return (
     <div className="optimal-response-container">
@@ -116,7 +188,7 @@ const OptimalResponseRenderer = ({ content }) => {
                 <h4 className="ai-name">{aiName}</h4>
                 {analysis.pros.length > 0 && (
                   <div className="analysis-item pros">
-                    <span className="pros-label">장점:</span>
+                    <span className="pros-label">✅ 정확한 정보:</span>
                     <ul>
                       {analysis.pros.map((pro, index) => (
                         <li key={index}>{pro}</li>
@@ -126,10 +198,28 @@ const OptimalResponseRenderer = ({ content }) => {
                 )}
                 {analysis.cons.length > 0 && (
                   <div className="analysis-item cons">
-                    <span className="cons-label">단점:</span>
+                    <span className="cons-label">❌ 틀린 정보:</span>
                     <ul>
                       {analysis.cons.map((con, index) => (
                         <li key={index}>{con}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {analysis.confidence > 0 && (
+                  <div className="analysis-item confidence">
+                    <span className="confidence-label">📊 신뢰도:</span>
+                    <span className={`confidence-value ${analysis.confidence >= 80 ? 'high' : analysis.confidence >= 60 ? 'medium' : 'low'}`}>
+                      {analysis.confidence}%
+                    </span>
+                  </div>
+                )}
+                {analysis.warnings.length > 0 && (
+                  <div className="analysis-item warnings">
+                    <span className="warnings-label">⚠️ 충돌 경고:</span>
+                    <ul>
+                      {analysis.warnings.map((warning, index) => (
+                        <li key={index}>{warning}</li>
                       ))}
                     </ul>
                   </div>
@@ -195,6 +285,11 @@ const ChatBox = () => {
   const [inputMessage, setInputMessage] = useState("");
   const messagesEndRefs = useRef({});
 
+  // 심판 모델 선택 상태
+  const [selectedJudgeModel, setSelectedJudgeModel] = useState("gpt-3.5-turbo");
+  const [availableJudgeModels, setAvailableJudgeModels] = useState({});
+  const [showJudgeModelSelector, setShowJudgeModelSelector] = useState(false);
+
   // 첨부(이미지/파일) 상태
   const [imageAttachments, setImageAttachments] = useState([]); // { id, file, url }
   const [fileAttachments, setFileAttachments] = useState([]);   // { id, file, name, size }
@@ -205,6 +300,22 @@ const ChatBox = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef(null);
   const plusBtnRef = useRef(null);
+
+  // 심판 모델 목록 불러오기
+  useEffect(() => {
+    const fetchJudgeModels = async () => {
+      try {
+        const response = await api.get('/api/verification/models/');
+        if (response.data.success) {
+          setAvailableJudgeModels(response.data.models);
+        }
+      } catch (error) {
+        console.warn('심판 모델 목록 조회 실패:', error);
+      }
+    };
+
+    fetchJudgeModels();
+  }, []);
 
   // 유사도 분석 관련 상태
   const [similarityData, setSimilarityData] = useState({});
@@ -495,6 +606,39 @@ const ChatBox = () => {
           border: 1px solid #e5e7eb;
           margin-bottom: 1rem;
           background: #f9fafb;
+        }
+        
+        .confidence-value {
+          font-weight: bold;
+          padding: 0.25rem 0.5rem;
+          border-radius: 4px;
+          margin-left: 0.5rem;
+        }
+        
+        .confidence-value.high {
+          background-color: #dcfce7;
+          color: #166534;
+        }
+        
+        .confidence-value.medium {
+          background-color: #fef3c7;
+          color: #92400e;
+        }
+        
+        .confidence-value.low {
+          background-color: #fee2e2;
+          color: #991b1b;
+        }
+        
+        .warnings-label {
+          color: #dc2626;
+          font-weight: 600;
+        }
+        
+        .analysis-item.warnings {
+          border-left: 3px solid #dc2626;
+          padding-left: 0.75rem;
+          background-color: #fef2f2;
         }
         
         .ai-analysis-card:last-child {

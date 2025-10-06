@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { X } from "lucide-react";
+import { api } from "../utils/api";
 
 const Settingbar = ({ isOpen, onClose }) => {
   const [isAISelectionOpen, setIsAISelectionOpen] = useState(false);
@@ -7,6 +8,10 @@ const Settingbar = ({ isOpen, onClose }) => {
   const [selectedAI, setSelectedAI] = useState(null);
   const [selectedLanguage, setSelectedLanguage] = useState(null);
   const [showConfirmButton, setShowConfirmButton] = useState(false);
+  
+  // 심판 모델 관련 상태
+  const [availableJudgeModels, setAvailableJudgeModels] = useState({});
+  const [currentJudgeModel, setCurrentJudgeModel] = useState("gpt-3.5-turbo");
   const languages = [
     "Afrikaans", "Bahasa Indonesia", "Bahasa Melayu", "Català", "Čeština", "Dansk", "Deutsch", 
     "Eesti", "English (United Kingdom)", "English (United States)", "Español (España)", "Español (Latinoamérica)", 
@@ -17,6 +22,37 @@ const Settingbar = ({ isOpen, onClose }) => {
     "اردو", "العربية", "فارسی", "मराठी", "हिन्दी", "বাংলা", "ગુજરાતી", "தமிழ்", "తెలుగు", "ಕನ್ನಡ", "മലയാളം", 
     "ไทย", "한국어", "中文 (简体)", "中文 (繁體)", "日本語"
   ];
+
+  // 심판 모델 목록 불러오기
+  useEffect(() => {
+    const fetchJudgeModels = async () => {
+      try {
+        const response = await api.get('/api/verification/models/');
+        if (response.data.success) {
+          setAvailableJudgeModels(response.data.models);
+          setCurrentJudgeModel(response.data.current_model || "gpt-3.5-turbo");
+        }
+      } catch (error) {
+        console.warn('심판 모델 목록 조회 실패:', error);
+      }
+    };
+
+    if (isOpen) {
+      fetchJudgeModels();
+    }
+  }, [isOpen]);
+
+  const handleJudgeModelChange = async (modelName) => {
+    try {
+      const response = await api.post('/api/verification/model/set/', { model_name: modelName });
+      if (response.data.success) {
+        setCurrentJudgeModel(modelName);
+        console.log(`심판 모델이 ${modelName}로 변경되었습니다.`);
+      }
+    } catch (error) {
+      console.warn('심판 모델 변경 실패:', error);
+    }
+  };
 
   const handleConfirm = () => {
     setIsAISelectionOpen(false);
@@ -73,7 +109,7 @@ const Settingbar = ({ isOpen, onClose }) => {
                 }}
                 onClick={() => setIsAISelectionOpen(true)}
               >
-                최적화 모델 선택
+                심판 모델 선택
               </button>
             </div>
           </div>
@@ -85,73 +121,62 @@ const Settingbar = ({ isOpen, onClose }) => {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-2xl shadow-lg relative pb-20">
             <X className="absolute top-3 right-3 w-6 h-6 cursor-pointer text-gray-500 hover:text-gray-700" onClick={handleClose} />
-            <h3 className="text-xl font-bold mb-2 text-left" style={{ color: '#2d3e2c' }}>최적화 모델 선택</h3>
+            <h3 className="text-xl font-bold mb-2 text-left" style={{ color: '#2d3e2c' }}>심판 모델 선택</h3>
             <p className="text-sm text-gray-600 mb-4 text-left">최적의 응답을 생성할 AI 모델을 선택하세요.</p>
             <hr className="w-full border-gray-300 mb-4" />
             <div className="grid grid-cols-3 gap-4 mb-6">
-              {["GPT-3.5", "Claude", "Mixtral"].map((model) => (
-                <button
-                  key={model}
-                  onClick={() => setSelectedAI(model)}
-                  className={`p-6 border border-gray-200 rounded-lg transition-colors ${
-                    selectedAI === model 
-                      ? "" 
-                      : ""
-                  }`}
-                  style={selectedAI === model ? { 
-                    borderColor: 'rgba(139, 168, 138, 0.4)', 
-                    backgroundColor: 'rgba(139, 168, 138, 0.05)' 
-                  } : { backgroundColor: 'white' }}
-                  onMouseEnter={(e) => {
-                    if (selectedAI !== model) {
-                      e.currentTarget.style.backgroundColor = 'rgba(139, 168, 138, 0.05)';
-                      e.currentTarget.style.borderColor = 'rgba(139, 168, 138, 0.4)';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (selectedAI !== model) {
-                      e.currentTarget.style.backgroundColor = 'transparent';
-                      e.currentTarget.style.borderColor = '#d1d5db';
-                    }
-                  }}
-                >
-                  <h3 className="font-bold text-lg mb-2" style={{ color: '#2d3e2c' }}>{model}</h3>
-                  <p className="text-sm text-gray-600 mb-2">
-                    {model === "GPT-3.5" ? "OpenAI의 GPT-3.5 모델" : 
-                     model === "Claude" ? "Anthropic의 Claude 모델" : 
-                     "Mixtral-8x7B 모델"}
-                  </p>
-                  <ul className="text-xs text-gray-500 list-disc pl-4">
-                    {model === "GPT-3.5" && (<>
-                      <li>빠른 응답 속도</li>
-                      <li>일관된 답변 품질</li>
-                      <li>다양한 주제 처리</li>
-                    </>)}
-                    {model === "Claude" && (<>
-                      <li>높은 분석 능력</li>
-                      <li>정확한 정보 제공</li>
-                      <li>상세한 설명 제공</li>
-                    </>)}
-                    {model === "Mixtral" && (<>
-                      <li>균형잡힌 성능</li>
-                      <li>다국어 지원</li>
-                      <li>코드 분석 특화</li>
-                    </>)}
-                  </ul>
-                </button>
-              ))}
+              {Object.entries(availableJudgeModels).map(([modelKey, modelInfo]) => {
+                const modelName = modelInfo.name;
+                const isSelected = currentJudgeModel === modelKey;
+                
+                return (
+                  <button
+                    key={modelKey}
+                    onClick={() => handleJudgeModelChange(modelKey)}
+                    className={`p-6 border border-gray-200 rounded-lg transition-colors ${
+                      isSelected 
+                        ? "" 
+                        : ""
+                    }`}
+                    style={isSelected ? { 
+                      borderColor: 'rgba(139, 168, 138, 0.4)', 
+                      backgroundColor: 'rgba(139, 168, 138, 0.05)' 
+                    } : { backgroundColor: 'white' }}
+                    onMouseEnter={(e) => {
+                      if (!isSelected) {
+                        e.currentTarget.style.backgroundColor = 'rgba(139, 168, 138, 0.05)';
+                        e.currentTarget.style.borderColor = 'rgba(139, 168, 138, 0.4)';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isSelected) {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                        e.currentTarget.style.borderColor = '#d1d5db';
+                      }
+                    }}
+                  >
+                    <h3 className="font-bold text-lg mb-2" style={{ color: '#2d3e2c' }}>{modelName}</h3>
+                    <p className="text-sm text-gray-600 mb-2">
+                      {modelKey.includes('gpt') ? "OpenAI의 GPT 모델" : 
+                       modelKey.includes('claude') ? "Anthropic의 Claude 모델" : 
+                       "기타 AI 모델"}
+                    </p>
+                    <ul className="text-xs text-gray-500 list-disc pl-4">
+                      <li>비용: {modelInfo.cost}</li>
+                      <li>속도: {modelInfo.speed}</li>
+                      <li>품질: {modelInfo.quality}</li>
+                      {modelInfo.default && <li className="text-green-600 font-semibold">기본값</li>}
+                    </ul>
+                  </button>
+                );
+              })}
             </div>
             <button
               onClick={handleConfirm}
-              className={`absolute bottom-6 right-6 px-6 py-3 rounded-lg transition-colors ${
-                selectedAI 
-                  ? "text-white" 
-                  : "bg-gray-300 text-gray-500 cursor-not-allowed"
-              }`}
-              style={selectedAI ? { backgroundColor: '#8ba88a' } : {}}
-              onMouseEnter={(e) => selectedAI && (e.target.style.backgroundColor = '#5d7c5b')}
-              onMouseLeave={(e) => selectedAI && (e.target.style.backgroundColor = '#8ba88a')}
-              disabled={!selectedAI}
+              className="absolute bottom-6 right-6 px-6 py-3 rounded-lg transition-colors text-white"
+              style={{ backgroundColor: '#8ba88a' }}
+              onMouseEnter={(e) => (e.target.style.backgroundColor = '#5d7c5b')}
+              onMouseLeave={(e) => (e.target.style.backgroundColor = '#8ba88a')}
             >
               확인
             </button>

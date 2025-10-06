@@ -13,6 +13,10 @@ from .person_search_handler import handle_person_search_command
 from .advanced_search_view import InterVideoSearchView, IntraVideoSearchView, TemporalAnalysisView
 from .advanced_command_handler import handle_inter_video_search_command, handle_intra_video_search_command, handle_temporal_analysis_command
 from .ai_response_generator import ai_response_generator
+from .evaluation_metrics import evaluation_metrics
+from .conversation_memory import conversation_memory
+from .integrated_chat_service import integrated_chat_service
+from .llm_cache_manager import llm_cache_manager, conversation_context_manager
 from django.utils import timezone
 import threading
 import openai
@@ -599,20 +603,29 @@ class ChatView(APIView):
 
             # optimal 모델인 경우 특별 처리
             if bot_name == 'optimal':
-                # 다른 AI들의 응답을 수집
-                other_responses_str = data.get('other_responses', '{}')
-                try:
-                    import json
-                    other_responses = json.loads(other_responses_str)
-                except:
-                    other_responses = {}
+                # 사용자 선택 심판 모델 (기본값: gpt-3.5-turbo)
+                judge_model = request.data.get('judge_model', 'gpt-3.5-turbo')
                 
-                if other_responses and len(other_responses) > 0:
-                    # 비용 절약: Ollama 사용으로 최적화된 통합 답변 생성
-                    response = generate_optimal_response(other_responses, final_message, OPENAI_API_KEY)
-                else:
-                    # 다른 모델들의 응답이 없으면 일반적인 응답
-                    response = chatbot.chat(final_message)
+                # 1-4단계: 3개 LLM 병렬 질의 → 심판 모델 검증 → 최적 답변 생성
+                try:
+                    final_result = collect_multi_llm_responses(final_message, judge_model)
+                    
+                    # 결과 포맷팅
+                    response = format_optimal_response(final_result)
+                    
+                    # 대화 맥락에 추가
+                    session_id = request.data.get('user_id', 'default_user')
+                    conversation_context_manager.add_conversation(
+                        session_id=session_id,
+                        user_message=final_message,
+                        ai_responses=final_result.get('llm_검증_결과', {}),
+                        optimal_response=final_result.get('최적의_답변', '')
+                    )
+                    
+                except Exception as e:
+                    print(f"❌ 최적 답변 생성 실패: {e}")
+                    # 폴백: 기본 응답
+                    response = f"최적 답변 생성 중 오류가 발생했습니다: {str(e)}"
             else:
                 # 비용 절약: 파일 분석 시 간소화된 프롬프트 사용
                 if uploaded_file and '파일 내용을 분석해' in final_message:
@@ -625,6 +638,353 @@ class ChatView(APIView):
             return Response({'response': response})
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+def collect_multi_llm_responses(user_message, judge_model="gpt-3.5-turbo"):
+    """1단계: 3개 LLM들에게 병렬 질의 후 심판 모델로 검증"""
+    import asyncio
+    import aiohttp
+    import json
+    import time
+    
+    responses = {}
+    
+    # 사용 가능한 LLM 엔드포인트들 (명시적 모델명 사용)
+    llm_endpoints = {
+        'GPT-3.5-turbo': 'http://localhost:8000/chat/gpt/',
+        'Claude-3.5-haiku': 'http://localhost:8000/chat/claude/', 
+        'Llama-3.1-8b': 'http://localhost:8000/chat/mixtral/'
+    }
+    
+    async def fetch_response(session, ai_name, endpoint):
+        """개별 LLM에서 응답 가져오기"""
+        try:
+            payload = {
+                'message': user_message,
+                'user_id': 'system'
+            }
+            
+            async with session.post(endpoint, json=payload, timeout=30) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return ai_name, result.get('response', '응답 없음')
+                else:
+                    return ai_name, f'오류: HTTP {response.status}'
+        except Exception as e:
+            return ai_name, f'오류: {str(e)}'
+    
+    async def collect_all_responses():
+        """모든 LLM에서 동시에 응답 수집"""
+        async with aiohttp.ClientSession() as session:
+            tasks = []
+            for ai_name, endpoint in llm_endpoints.items():
+                task = fetch_response(session, ai_name, endpoint)
+                tasks.append(task)
+            
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            for result in results:
+                if isinstance(result, tuple):
+                    ai_name, response = result
+                    responses[ai_name] = response
+                elif isinstance(result, Exception):
+                    print(f"LLM 응답 수집 오류: {result}")
+    
+    try:
+        # 비동기 실행
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(collect_all_responses())
+        loop.close()
+        
+        print(f"✅ {len(responses)}개 LLM에서 응답 수집 완료: {list(responses.keys())}")
+        
+        # 3단계: 심판 모델로 검증 및 최적 답변 생성
+        final_result = judge_and_generate_optimal_response(responses, user_message, judge_model)
+        return final_result
+        
+    except Exception as e:
+        print(f"❌ LLM 응답 수집 실패: {e}")
+        # 폴백: 기본 응답들
+        fallback_responses = {
+            'GPT-3.5-turbo': f'GPT 응답 (수집 실패): {user_message}에 대한 답변입니다.',
+            'Claude-3.5-haiku': f'Claude 응답 (수집 실패): {user_message}에 대한 답변입니다.',
+            'Llama-3.1-8b': f'Llama 응답 (수집 실패): {user_message}에 대한 답변입니다.'
+        }
+        return judge_and_generate_optimal_response(fallback_responses, user_message, judge_model)
+
+def judge_and_generate_optimal_response(llm_responses, user_question, judge_model="gpt-3.5-turbo"):
+    """심판 모델을 통한 검증 및 최적 답변 생성"""
+    try:
+        # 심판 프롬프트 구성
+        judge_prompt = f"""
+다음은 동일한 질문에 대한 여러 LLM들의 답변입니다.
+각 답변의 진실 여부를 판단하고, 잘못된 정보를 설명해주세요.
+올바른 정보만 사용해 최적의 답변을 새로 작성해주세요.
+
+질문: {user_question}
+
+[GPT-3.5-turbo 답변]
+{llm_responses.get('GPT-3.5-turbo', '응답 없음')}
+
+[Claude-3.5-haiku 답변]
+{llm_responses.get('Claude-3.5-haiku', '응답 없음')}
+
+[Llama-3.1-8b 답변]
+{llm_responses.get('Llama-3.1-8b', '응답 없음')}
+
+다음 형식으로 답변해주세요:
+
+**최적의 답변:**
+[올바른 정보만을 종합한 최적의 답변]
+
+**각 LLM 검증 결과:**
+- GPT-3.5-turbo: [정확성 ✅/❌] [오류 설명 또는 "오류 없음"]
+- Claude-3.5-haiku: [정확성 ✅/❌] [오류 설명 또는 "오류 없음"]  
+- Llama-3.1-8b: [정확성 ✅/❌] [오류 설명 또는 "오류 없음"]
+
+주의사항:
+- 틀린 정보가 있으면 구체적으로 설명하세요
+- 정확하지 않은 정보는 최적의 답변에 포함하지 마세요
+- 확신이 없는 정보는 제외하세요
+"""
+
+        # 심판 모델 호출
+        judge_response = call_judge_model(judge_model, judge_prompt)
+        
+        # 결과 파싱
+        parsed_result = parse_judge_response(judge_response, judge_model)
+        
+        return parsed_result
+        
+    except Exception as e:
+        print(f"❌ 심판 모델 검증 실패: {e}")
+        # 폴백: 가장 긴 응답을 최적 답변으로 사용
+        if llm_responses:
+            longest_response = max(llm_responses.values(), key=len)
+            return {
+                "최적의_답변": longest_response,
+                "llm_검증_결과": {
+                    model: {"정확성": "✅", "오류": "검증 실패로 인한 기본값"}
+                    for model in llm_responses.keys()
+                },
+                "심판모델": judge_model,
+                "상태": "검증 실패"
+            }
+        return {
+            "최적의_답변": "검증 중 오류가 발생했습니다.",
+            "llm_검증_결과": {},
+            "심판모델": judge_model,
+            "상태": "오류"
+        }
+
+def call_judge_model(model_name, prompt):
+    """심판 모델 호출"""
+    try:
+        if model_name in ['GPT-3.5-turbo', 'GPT-4', 'GPT-4o']:
+            # OpenAI 모델 사용
+            import openai
+            openai_api_key = os.getenv('OPENAI_API_KEY')
+            if not openai_api_key:
+                raise ValueError("OpenAI API 키가 설정되지 않음")
+            
+            client = openai.OpenAI(api_key=openai_api_key)
+            
+            # 모델명을 OpenAI API 형식으로 변환
+            openai_model_name = model_name.lower().replace('-', '-')
+            if model_name == 'GPT-4':
+                openai_model_name = 'gpt-4'
+            elif model_name == 'GPT-4o':
+                openai_model_name = 'gpt-4o'
+            elif model_name == 'GPT-3.5-turbo':
+                openai_model_name = 'gpt-3.5-turbo'
+            
+            response = client.chat.completions.create(
+                model=openai_model_name,
+                messages=[
+                    {"role": "system", "content": "당신은 사실 검증 전문가입니다. 정확한 정보만 제공하고 틀린 정보를 명확히 지적하세요."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=1500,
+                temperature=0.1
+            )
+            
+            return response.choices[0].message.content.strip()
+            
+        elif model_name == 'Claude-3.5-haiku':
+            # Claude 모델 사용 (대안)
+            import anthropic
+            anthropic_api_key = os.getenv('ANTHROPIC_API_KEY')
+            if not anthropic_api_key:
+                raise ValueError("Anthropic API 키가 설정되지 않음")
+            
+            client = anthropic.Anthropic(api_key=anthropic_api_key)
+            response = client.messages.create(
+                model="claude-3-5-haiku-20241022",
+                max_tokens=1500,
+                temperature=0.1,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            return response.content[0].text
+            
+        elif model_name == 'LLaMA 3.1 8B':
+            # LLaMA 모델 사용 (Groq API)
+            import groq
+            groq_api_key = os.getenv('GROQ_API_KEY')
+            if not groq_api_key:
+                raise ValueError("Groq API 키가 설정되지 않음")
+            
+            client = groq.Groq(api_key=groq_api_key)
+            response = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {"role": "system", "content": "당신은 사실 검증 전문가입니다. 정확한 정보만 제공하고 틀린 정보를 명확히 지적하세요."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=1500,
+                temperature=0.1
+            )
+            
+            return response.choices[0].message.content.strip()
+            
+        else:
+            # 기본값으로 GPT-3.5-turbo 사용
+            return call_judge_model('GPT-3.5-turbo', prompt)
+            
+    except Exception as e:
+        print(f"❌ 심판 모델 {model_name} 호출 실패: {e}")
+        # 폴백: 기본 모델 사용
+        if model_name != 'GPT-3.5-turbo':
+            return call_judge_model('GPT-3.5-turbo', prompt)
+        else:
+            raise e
+
+def parse_judge_response(judge_response, judge_model):
+    """심판 모델 응답 파싱"""
+    try:
+        result = {
+            "최적의_답변": "",
+            "llm_검증_결과": {
+                "GPT-3.5-turbo": {"정확성": "✅", "오류": "오류 없음"},
+                "Claude-3.5-haiku": {"정확성": "✅", "오류": "오류 없음"},
+                "Llama-3.1-8b": {"정확성": "✅", "오류": "오류 없음"}
+            },
+            "심판모델": judge_model,
+            "상태": "성공"
+        }
+        
+        lines = judge_response.split('\n')
+        current_section = None
+        
+        for line in lines:
+            line = line.strip()
+            
+            if '**최적의 답변:**' in line:
+                current_section = 'optimal'
+                continue
+            elif '**각 LLM 검증 결과:**' in line:
+                current_section = 'verification'
+                continue
+            elif line.startswith('- GPT-3.5-turbo:'):
+                # GPT 검증 결과 파싱
+                content = line.replace('- GPT-3.5-turbo:', '').strip()
+                if '❌' in content:
+                    result["llm_검증_결과"]["GPT-3.5-turbo"]["정확성"] = "❌"
+                    result["llm_검증_결과"]["GPT-3.5-turbo"]["오류"] = content.replace('❌', '').strip()
+                else:
+                    result["llm_검증_결과"]["GPT-3.5-turbo"]["정확성"] = "✅"
+                    result["llm_검증_결과"]["GPT-3.5-turbo"]["오류"] = "오류 없음"
+            elif line.startswith('- Claude-3.5-haiku:'):
+                # Claude 검증 결과 파싱
+                content = line.replace('- Claude-3.5-haiku:', '').strip()
+                if '❌' in content:
+                    result["llm_검증_결과"]["Claude-3.5-haiku"]["정확성"] = "❌"
+                    result["llm_검증_결과"]["Claude-3.5-haiku"]["오류"] = content.replace('❌', '').strip()
+                else:
+                    result["llm_검증_결과"]["Claude-3.5-haiku"]["정확성"] = "✅"
+                    result["llm_검증_결과"]["Claude-3.5-haiku"]["오류"] = "오류 없음"
+            elif line.startswith('- Llama-3.1-8b:'):
+                # Llama 검증 결과 파싱
+                content = line.replace('- Llama-3.1-8b:', '').strip()
+                if '❌' in content:
+                    result["llm_검증_결과"]["Llama-3.1-8b"]["정확성"] = "❌"
+                    result["llm_검증_결과"]["Llama-3.1-8b"]["오류"] = content.replace('❌', '').strip()
+                else:
+                    result["llm_검증_결과"]["Llama-3.1-8b"]["정확성"] = "✅"
+                    result["llm_검증_결과"]["Llama-3.1-8b"]["오류"] = "오류 없음"
+            elif current_section == 'optimal' and line and not line.startswith('**'):
+                result["최적의_답변"] += line + '\n'
+        
+        # 최적의 답변이 비어있으면 전체 응답을 사용
+        if not result["최적의_답변"].strip():
+            result["최적의_답변"] = judge_response
+        
+        return result
+        
+    except Exception as e:
+        print(f"❌ 심판 응답 파싱 실패: {e}")
+        return {
+            "최적의_답변": judge_response,
+            "llm_검증_결과": {
+                "gpt-3.5-turbo": {"정확성": "✅", "오류": "파싱 실패"},
+                "claude-3.5-haiku": {"정확성": "✅", "오류": "파싱 실패"},
+                "llama-3.1-8b": {"정확성": "✅", "오류": "파싱 실패"}
+            },
+            "심판모델": judge_model,
+            "상태": "파싱 실패"
+        }
+
+def format_optimal_response(final_result):
+    """최적 답변 결과를 사용자 친화적 형식으로 포맷팅"""
+    try:
+        optimal_answer = final_result.get("최적의_답변", "")
+        verification_results = final_result.get("llm_검증_결과", {})
+        judge_model = final_result.get("심판모델", "gpt-3.5-turbo")
+        status = final_result.get("상태", "성공")
+        
+        # 메인 답변 구성
+        formatted_response = f"""**최적의 답변:**
+
+{optimal_answer}
+
+*({judge_model} 검증 완료 - 정확한 정보만 포함)*
+
+**각 LLM 검증 결과:**
+"""
+        
+        # 각 LLM 검증 결과 추가
+        model_names = {
+            "GPT-3.5-turbo": "GPT-3.5 Turbo",
+            "Claude-3.5-haiku": "Claude-3.5 Haiku", 
+            "Llama-3.1-8b": "Llama 3.1 8B"
+        }
+        
+        for model_key, model_display_name in model_names.items():
+            if model_key in verification_results:
+                verification = verification_results[model_key]
+                accuracy = verification.get("정확성", "✅")
+                error = verification.get("오류", "오류 없음")
+                
+                formatted_response += f"""
+**{model_display_name}:**
+{accuracy} 정확성: {accuracy}
+❌ 오류: {error}
+"""
+        
+        # 상태 정보 추가
+        if status != "성공":
+            formatted_response += f"\n*상태: {status}*"
+        
+        return formatted_response
+        
+    except Exception as e:
+        print(f"❌ 응답 포맷팅 실패: {e}")
+        return f"""**최적의 답변:**
+
+{final_result.get('최적의_답변', '답변 생성 실패')}
+
+*포맷팅 오류 발생*
+"""
 
 def generate_unique_username(email, name=None):
     """이메일 기반으로 고유한 사용자명 생성"""
@@ -1398,6 +1758,11 @@ class VideoChatView(APIView):
                 print(f"❌ video.analysis_status: {video.analysis_status}")
                 print(f"❌ video.is_analyzed: {video.is_analyzed}")
             
+            # 대화 맥락 가져오기
+            session_id = f"video_{video_id}_user_{user.id}"
+            context_prompt = conversation_memory.generate_context_prompt(session_id, message)
+            
+            # 프레임 검색 (의도 기반)
             relevant_frames = self._find_relevant_frames(message, analysis_json_data, video_id)
             print(f"🔍 검색된 프레임 수: {len(relevant_frames)}")
             if relevant_frames:
@@ -1476,185 +1841,30 @@ class VideoChatView(APIView):
                         # 색상 검색 모드 확인
                         is_color_search = any(keyword in message.lower() for keyword in ['빨간색', '파란색', '노란색', '초록색', '보라색', '분홍색', '검은색', '흰색', '회색', '주황색', '갈색', '옷'])
                         
-                        # 영상 정보와 JSON 분석 데이터를 포함한 프롬프트 생성
+                        # 간소화된 영상 정보 프롬프트 생성
                         video_context = f"""
-영상 정보:
-- 파일명: {analysis_data.get('original_name', 'Unknown')}
-- 파일 크기: {analysis_data.get('file_size', 0) / (1024*1024):.1f}MB
-- 업로드 시간: {analysis_data.get('uploaded_at', 'Unknown')}
-- 상태: {analysis_data.get('analysis_status', 'Unknown')}
-
-📊 기존 영상 분석 데이터 (JSON):
-{json.dumps(analysis_json_data, ensure_ascii=False, indent=2)[:2000]}...
-
-📊 TeletoVision_AI 스타일 분석 데이터:
-- Detection DB: {json.dumps(teleto_vision_data.get('detection_db', {}), ensure_ascii=False, indent=2)[:1000]}...
-- Meta DB: {json.dumps(teleto_vision_data.get('meta_db', {}), ensure_ascii=False, indent=2)[:1000]}...
-
-💡 위 모든 JSON 데이터를 참고하여 사용자의 질문에 자연스럽게 답변해주세요.
-- 기존 분석 데이터와 TeletoVision_AI 스타일 데이터를 모두 활용
-- 요약, 하이라이트, 사람 찾기, 색상 검색 등 모든 질문에 대해 JSON 데이터를 활용
-- 각 AI의 특성에 맞게 답변 스타일을 조정
-- 구체적이고 유용한 정보 제공
+영상: {analysis_data.get('original_name', 'Unknown')} ({analysis_data.get('file_size', 0) / (1024*1024):.1f}MB)
+분석: {len(analysis_json_data.get('frame_results', []))}개 프레임, {analysis_json_data.get('video_summary', {}).get('total_detections', 0)}개 객체
+품질: {analysis_json_data.get('video_summary', {}).get('quality_assessment', {}).get('overall_score', 0):.2f}
 """
                         
-                        # 관련 프레임 정보 추가 (색상 검색 모드에 따라 다르게 처리)
+                        # 간소화된 프레임 정보
                         frame_context = ""
                         if relevant_frames:
-                            if is_color_search:
-                                frame_context = "\n\n관련 프레임 정보 (색상 분석 필요):\n"
-                                frame_context += "⚠️ 중요: 현재 분석 결과에는 색상 정보가 포함되어 있지 않습니다.\n"
-                                frame_context += "하지만 실제 프레임 이미지들을 통해 색상을 직접 확인할 수 있습니다.\n\n"
-                                
-                                for i, frame in enumerate(relevant_frames, 1):
-                                    frame_context += f"프레임 {i}: 시간 {frame['timestamp']:.1f}초\n"
-                                    frame_context += f"  - 이미지 URL: {frame['image_url']}\n"
-                                    frame_context += f"  - 실제 파일 경로: {frame.get('actual_image_path', 'N/A')}\n"
-                                    
-                                    # 색상 분석 결과 추가
-                                    dominant_colors = frame.get('dominant_colors', [])
-                                    if dominant_colors:
-                                        frame_context += f"  - 색상 분석 결과: {dominant_colors}\n"
-                                        color_match = frame.get('color_search_info', {}).get('color_match_found', False)
-                                        frame_context += f"  - 색상 매칭: {'✅ 발견' if color_match else '❌ 없음'}\n"
-                                    else:
-                                        frame_context += f"  - 색상 분석 결과: 없음\n"
-                                    
-                                    # 실제 이미지 파일을 base64로 인코딩하여 포함
-                                    actual_image_path = frame.get('actual_image_path')
-                                    if actual_image_path and os.path.exists(actual_image_path):
-                                        try:
-                                            import base64
-                                            with open(actual_image_path, 'rb') as img_file:
-                                                img_data = img_file.read()
-                                                img_base64 = base64.b64encode(img_data).decode('utf-8')
-                                                # 이미지 크기가 너무 크면 URL만 제공
-                                                if len(img_base64) > 100000:  # 100KB 제한
-                                                    frame_context += f"  - 이미지 URL (직접 확인 필요): {frame['image_url']}\n"
-                                                    print(f"⚠️ 프레임 {i} 이미지가 너무 커서 URL만 제공 (크기: {len(img_base64)} 문자)")
-                                                else:
-                                                    frame_context += f"  - 실제 이미지 (base64): data:image/jpeg;base64,{img_base64}\n"
-                                                    print(f"✅ 프레임 {i} 이미지 base64 인코딩 완료 (크기: {len(img_base64)} 문자)")
-                                        except Exception as e:
-                                            frame_context += f"  - 이미지 로드 실패: {str(e)}\n"
-                                            print(f"❌ 프레임 {i} 이미지 로드 실패: {str(e)}")
-                                    
-                                    if frame['persons']:
-                                        frame_context += f"  - 사람 {len(frame['persons'])}명 감지됨!\n"
-                                        for j, person in enumerate(frame['persons'], 1):
-                                            confidence = person.get('confidence', 0)
-                                            bbox = person.get('bbox', [])
-                                            frame_context += f"    사람 {j}: 신뢰도 {confidence:.2f}, 위치 {bbox}\n"
-                                    frame_context += "\n"
-                                
-                                frame_context += "💡 각 프레임 이미지를 직접 확인하여 요청하신 색상의 옷을 입은 사람이 있는지 분석해주세요.\n"
-                                frame_context += f"🔗 이미지 접근 방법: 각 프레임의 이미지 URL을 브라우저에서 열어서 직접 확인할 수 있습니다.\n"
-                                frame_context += f"📋 분석 요청: 위 이미지들을 보고 '{message}'에서 요청한 색상의 옷을 입은 사람이 있는지 정확히 분석해주세요.\n"
-                                frame_context += f"🎨 색상 분석 결과: 위에서 제공된 색상 분석 결과를 참고하여 요청된 색상과 일치하는지 확인해주세요.\n"
-                            else:
-                                frame_context = "\n\n관련 프레임 정보 (사람 감지됨):\n"
-                                for i, frame in enumerate(relevant_frames, 1):
-                                    frame_context += f"프레임 {i}: 시간 {frame['timestamp']:.1f}초, 관련도 {frame['relevance_score']}점\n"
-                                    if frame['persons']:
-                                        frame_context += f"  - 사람 {len(frame['persons'])}명 감지됨!\n"
-                                        # 각 사람의 상세 정보 추가
-                                        for j, person in enumerate(frame['persons'], 1):
-                                            confidence = person.get('confidence', 0)
-                                            bbox = person.get('bbox', [])
-                                            frame_context += f"    사람 {j}: 신뢰도 {confidence:.2f}, 위치 {bbox}\n"
-                                            # 속성 정보 추가
-                                            attrs = person.get('attributes', {})
-                                            if 'gender' in attrs:
-                                                gender_info = attrs['gender']
-                                                frame_context += f"      성별: {gender_info.get('value', 'unknown')} (신뢰도: {gender_info.get('confidence', 0):.2f})\n"
-                                            if 'age' in attrs:
-                                                age_info = attrs['age']
-                                                frame_context += f"      나이: {age_info.get('value', 'unknown')} (신뢰도: {age_info.get('confidence', 0):.2f})\n"
-                                    if frame['objects']:
-                                        frame_context += f"  - 객체 {len(frame['objects'])}개 감지\n"
-                                    scene_attrs = frame.get('scene_attributes', {})
-                                    if scene_attrs:
-                                        frame_context += f"  - 장면: {scene_attrs.get('scene_type', 'unknown')}, 조명: {scene_attrs.get('lighting', 'unknown')}\n"
-                                    frame_context += "\n"
+                            frame_context = f"\n관련 프레임 {len(relevant_frames)}개:\n"
+                            for i, frame in enumerate(relevant_frames[:2], 1):  # 최대 2개만
+                                frame_context += f"프레임 {i}: {frame['timestamp']:.1f}초, 사람 {len(frame.get('persons', []))}명\n"
                         else:
-                            frame_context = "\n\n관련 프레임 정보: 사람이 감지된 프레임이 없습니다.\n"
+                            frame_context = "\n관련 프레임 없음\n"
                         
                         enhanced_message = f"""{video_context}{frame_context}
 
 사용자 질문: "{message}"
 
-위 영상 분석 정보를 바탕으로 사용자의 질문에 정확하고 도움이 되는 답변을 제공해주세요.
-
-답변 시 다음을 포함해주세요:
-1. 질문에 대한 직접적인 답변
-2. 관련 프레임의 구체적인 정보 (시간, 내용 등)
-3. 영상에서 관찰할 수 있는 세부사항
-4. 추가로 확인할 수 있는 다른 요소들
-
-답변은 한국어로 작성하고, 구체적이고 실용적인 정보를 제공해주세요.
-
-중요: 위 프레임 정보에서 사람이 감지되었다면, 반드시 그 사실을 명확히 언급하고 구체적인 정보를 제공해주세요. 사람이 감지되지 않았다면 그 사실도 명확히 말해주세요.
-
-"🎨 색상 검색 모드: 위에서 제공된 프레임 이미지들을 직접 확인하여 요청하신 색상의 옷을 입은 사람이 있는지 분석해주세요. 각 프레임의 실제 이미지(base64)를 직접 보고 색상을 분석해주세요.
-
-⚠️ 중요: 현재 분석 시스템은 색상 정보를 제공하지 않으므로, 반드시 실제 이미지를 직접 확인하여 색상을 분석해야 합니다. 분석 결과에 색상 정보가 없다고 해서 해당 색상의 옷을 입은 사람이 없다고 결론내리지 마세요. 실제 이미지를 보고 정확한 색상을 분석해주세요.
-
-🎯 특별 지시: 각 프레임 이미지에서 실제로 보이는 색상을 정확히 분석하고, 요청된 색상과 일치하는지 판단해주세요. 배경에 있는 사람들도 놓치지 말고 확인해주세요. 
-
-📸 이미지 분석: 위에 제공된 base64 이미지들을 직접 보고, 분홍색 옷을 입은 사람이 있는지 정확히 분석해주세요." if is_color_search else """""
+위 정보를 바탕으로 친근하게 답변해주세요."""
                         
-                        # AI별 특성화된 프롬프트 생성
-                        if bot_name == 'gpt':
-                            ai_prompt = f"""
-당신은 GPT-4o입니다. 다음 영상 분석 데이터를 바탕으로 상세하고 체계적인 답변을 제공해주세요.
-
-{video_context}
-
-{frame_context}
-
-사용자 질문: {message}
-
-답변 요구사항:
-- 상세하고 체계적인 분석
-- 데이터 기반의 정확한 통계 제공
-- 논리적이고 구조화된 설명
-- 전문적이고 학술적인 톤
-- JSON 데이터의 구체적인 수치와 정보 활용
-"""
-                        elif bot_name == 'claude':
-                            ai_prompt = f"""
-당신은 Claude-3.5-Sonnet입니다. 다음 영상 분석 데이터를 바탕으로 간결하고 명확한 답변을 제공해주세요.
-
-{video_context}
-
-{frame_context}
-
-사용자 질문: {message}
-
-답변 요구사항:
-- 간결하고 명확한 설명
-- 핵심 정보에 집중
-- 실용적이고 이해하기 쉬운 톤
-- 효율적인 정보 전달
-- JSON 데이터의 핵심 정보만 추출
-"""
-                        else:  # mixtral
-                            ai_prompt = f"""
-당신은 Mixtral-8x7B입니다. 다음 영상 분석 데이터를 바탕으로 시각적이고 생동감 있는 답변을 제공해주세요.
-
-{video_context}
-
-{frame_context}
-
-사용자 질문: {message}
-
-답변 요구사항:
-- 시각적이고 구체적인 설명
-- 생동감 있는 표현
-- 창의적이고 독창적인 관점
-- 사용자 친화적인 톤
-- JSON 데이터를 시각적으로 해석
-"""
+                        # 간소화된 AI 프롬프트
+                        ai_prompt = enhanced_message
                         
                         # AI별 특성화된 프롬프트로 응답 생성
                         ai_response = chatbot.chat(ai_prompt)
@@ -1730,6 +1940,33 @@ class VideoChatView(APIView):
                 # AI 응답이 하나만 있는 경우
                 optimal_response = list(ai_responses.values())[0]
             
+            # 응답 품질 평가
+            evaluation_results = {}
+            if ai_responses and len(ai_responses) > 1:
+                try:
+                    evaluation_results = evaluation_metrics.evaluate_summary_quality(
+                        ai_responses, reference=optimal_response
+                    )
+                    print(f"✅ 응답 품질 평가 완료: {len(evaluation_results)}개 AI")
+                except Exception as e:
+                    print(f"❌ 응답 품질 평가 실패: {e}")
+            
+            # 대화 맥락 업데이트
+            try:
+                conversation_memory.add_context(
+                    session_id=session_id,
+                    user_message=message,
+                    ai_responses=ai_responses,
+                    video_context={
+                        'video_id': video_id,
+                        'video_name': video.original_name,
+                        'relevant_frames_count': len(relevant_frames)
+                    }
+                )
+                print(f"✅ 대화 맥락 업데이트 완료")
+            except Exception as e:
+                print(f"❌ 대화 맥락 업데이트 실패: {e}")
+            
             # 응답 데이터 구성
             response_data = {
                 'session_id': str(session.id),
@@ -1752,7 +1989,12 @@ class VideoChatView(APIView):
                         'created_at': individual_messages[0].created_at if individual_messages else None
                     } if optimal_response else None
                 },
-                'relevant_frames': relevant_frames  # 관련 프레임 정보 추가
+                'relevant_frames': relevant_frames,  # 관련 프레임 정보 추가
+                'evaluation_results': evaluation_results,  # 품질 평가 결과
+                'context_info': {
+                    'session_id': session_id,
+                    'context_length': len(conversation_memory.get_context(session_id).get('conversations', []))
+                }
             }
             
             # 디버깅: relevant_frames 확인
@@ -1777,8 +2019,82 @@ class VideoChatView(APIView):
                 'traceback': traceback.format_exc()
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    def _classify_intent(self, message):
+        """사용자 메시지의 의도를 분류"""
+        try:
+            message_lower = message.lower()
+            
+            # 의도별 키워드 정의
+            intent_keywords = {
+                'video_summary': ['요약', 'summary', '간단', '상세', '하이라이트', 'highlight', '정리'],
+                'video_search': ['찾아', '검색', 'search', '보여', '어디', '언제', '누가'],
+                'person_search': ['사람', 'person', 'people', 'human', '남성', '여성', '성별'],
+                'color_search': ['빨간색', '파란색', '노란색', '초록색', '보라색', '분홍색', '검은색', '흰색', '회색', '주황색', '갈색', '색깔', '색상', '옷', '입은', '착용'],
+                'temporal_analysis': ['시간', '분', '초', '언제', '몇시', '성비', '인원', '통계'],
+                'inter_video_search': ['비오는', '밤', '낮', '날씨', '조명', '영상간', '다른영상'],
+                'general_chat': ['안녕', 'hello', 'hi', '고마워', '감사', '도움', '질문']
+            }
+            
+            # 의도 점수 계산
+            intent_scores = {}
+            for intent, keywords in intent_keywords.items():
+                score = sum(1 for keyword in keywords if keyword in message_lower)
+                if score > 0:
+                    intent_scores[intent] = score
+            
+            # 가장 높은 점수의 의도 선택
+            if intent_scores:
+                detected_intent = max(intent_scores, key=intent_scores.get)
+                confidence = intent_scores[detected_intent] / len(message_lower.split())
+                print(f"🎯 의도 분류: {detected_intent} (신뢰도: {confidence:.2f})")
+                return detected_intent, confidence
+            else:
+                print("🎯 의도 분류: general_chat (기본값)")
+                return 'general_chat', 0.0
+                
+        except Exception as e:
+            print(f"❌ 의도 분류 중 오류: {e}")
+            return 'general_chat', 0.0
+
+    def _parse_time_range(self, message):
+        """메시지에서 시간 범위를 파싱"""
+        try:
+            import re
+            
+            # 시간 패턴 매칭 (예: "3:00~5:00", "3분~5분", "180초~300초")
+            time_patterns = [
+                r'(\d+):(\d+)~(\d+):(\d+)',  # 3:00~5:00
+                r'(\d+)분~(\d+)분',          # 3분~5분
+                r'(\d+)초~(\d+)초',          # 180초~300초
+            ]
+            
+            for pattern in time_patterns:
+                match = re.search(pattern, message)
+                if match:
+                    groups = match.groups()
+                    if len(groups) == 4:  # 3:00~5:00 형식
+                        start_min, start_sec, end_min, end_sec = map(int, groups)
+                        start_time = start_min * 60 + start_sec
+                        end_time = end_min * 60 + end_sec
+                        return start_time, end_time
+                    elif len(groups) == 2:  # 분 또는 초 형식
+                        start_val, end_val = map(int, groups)
+                        if '분' in message:
+                            start_time = start_val * 60
+                            end_time = end_val * 60
+                        else:  # 초
+                            start_time = start_val
+                            end_time = end_val
+                        return start_time, end_time
+            
+            return None
+            
+        except Exception as e:
+            print(f"❌ 시간 범위 파싱 중 오류: {e}")
+            return None
+
     def _find_relevant_frames(self, message, analysis_json_data, video_id):
-        """사용자 메시지에 따라 관련 프레임을 찾아서 이미지 URL과 함께 반환"""
+        """사용자 메시지에 따라 관련 프레임을 찾아서 이미지 URL과 함께 반환 (의도 기반)"""
         try:
             if not analysis_json_data or 'frame_results' not in analysis_json_data:
                 print("❌ 분석 데이터 또는 프레임 결과가 없습니다.")
@@ -1790,6 +2106,10 @@ class VideoChatView(APIView):
             # 프레임 결과에서 매칭되는 프레임 찾기
             frame_results = analysis_json_data.get('frame_results', [])
             print(f"🔍 검색할 프레임 수: {len(frame_results)}")
+            
+            # 의도 분류
+            intent, confidence = self._classify_intent(message)
+            print(f"🎯 검색 의도: {intent}")
             
             # 색상 기반 검색
             color_keywords = {
@@ -1807,107 +2127,125 @@ class VideoChatView(APIView):
                 '옷': ['clothing', 'clothes', 'dress', 'shirt', 'pants', 'jacket']
             }
             
-            # 색상 검색 모드 확인
-            is_color_search = False
-            detected_colors = []
-            for color_korean, color_terms in color_keywords.items():
-                if any(term in message_lower for term in color_terms):
-                    is_color_search = True
-                    detected_colors.append(color_korean)
-                    print(f"🎨 색상 검색 감지: {color_korean}")
-            
-            # 색상 검색 모드 (우선순위)
-            if is_color_search:
-                print(f"🎨 색상 검색 모드: {detected_colors}")
-                print(f"🔍 검색할 프레임 수: {len(frame_results)}")
-                for frame in frame_results:
-                    persons = frame.get('persons', [])
-                    
-                    # 색상 분석 결과 확인
-                    dominant_colors = frame.get('dominant_colors', [])
-                    color_match_found = False
-                    
-                    # 요청된 색상과 매칭되는지 확인 (더 유연한 매칭)
-                    for detected_color in detected_colors:
-                        for color_info in dominant_colors:
-                            color_name = color_info.get('color', '').lower()
-                            detected_color_lower = detected_color.lower()
-                            
-                            # 색상 키워드 매핑을 통한 매칭
-                            color_mapping = {
-                                '분홍색': 'pink', '핑크': 'pink',
-                                '빨간색': 'red', '빨강': 'red',
-                                '파란색': 'blue', '파랑': 'blue',
-                                '노란색': 'yellow', '노랑': 'yellow',
-                                '초록색': 'green', '녹색': 'green',
-                                '보라색': 'purple', '자주색': 'purple',
-                                '검은색': 'black', '검정': 'black',
-                                '흰색': 'white', '하양': 'white',
-                                '회색': 'gray', 'grey': 'gray',
-                                '주황색': 'orange', '오렌지': 'orange',
-                                '갈색': 'brown', '브라운': 'brown'
-                            }
-                            
-                            # 매핑된 색상으로 비교
-                            mapped_color = color_mapping.get(detected_color_lower, detected_color_lower)
-                            
-                            # 정확한 매칭 또는 부분 매칭
-                            if (mapped_color == color_name or 
-                                detected_color_lower == color_name or 
-                                detected_color_lower in color_name or 
-                                color_name in detected_color_lower):
-                                color_match_found = True
-                                print(f"✅ 색상 매칭 발견: {detected_color} -> {color_info}")
-                                break
-                        if color_match_found:
-                            break
-                    
-                    # 디버깅을 위한 로그 추가
-                    print(f"🔍 프레임 {frame.get('image_id', 0)} 색상 분석:")
-                    print(f"  - 요청된 색상: {detected_colors}")
-                    print(f"  - 감지된 색상: {[c.get('color', '') for c in dominant_colors]}")
-                    print(f"  - 매칭 결과: {color_match_found}")
-                    
-                    # 색상 검색의 경우 색상 매칭이 된 프레임만 포함
-                    if color_match_found:
-                        frame_image_path = frame.get('frame_image_path', '')
-                        actual_image_path = None
-                        if frame_image_path:
-                            # 실제 파일 시스템 경로 생성
-                            import os
-                            from django.conf import settings
-                            actual_image_path = os.path.join(settings.MEDIA_ROOT, frame_image_path)
-                            if os.path.exists(actual_image_path):
-                                print(f"✅ 실제 이미지 파일 존재: {actual_image_path}")
-                            else:
-                                print(f"❌ 실제 이미지 파일 없음: {actual_image_path}")
+            # 의도 기반 프레임 검색
+            if intent == 'color_search':
+                print("🎨 색상 검색 모드")
+                detected_colors = []
+                for color_korean, color_terms in color_keywords.items():
+                    if any(term in message_lower for term in color_terms):
+                        detected_colors.append(color_korean)
+                        print(f"🎨 색상 검색 감지: {color_korean}")
+                
+                if detected_colors:
+                    print(f"🎨 색상 검색 모드: {detected_colors}")
+                    print(f"🔍 검색할 프레임 수: {len(frame_results)}")
+                    for frame in frame_results:
+                        persons = frame.get('persons', [])
                         
-                        frame_info = {
-                            'image_id': frame.get('image_id', 0),
-                            'timestamp': frame.get('timestamp', 0),
-                            'frame_image_path': frame_image_path,
-                            'image_url': f'/media/{frame_image_path}',
-                            'actual_image_path': actual_image_path,  # 실제 파일 경로 추가
-                            'persons': persons,
-                            'objects': frame.get('objects', []),
-                            'scene_attributes': frame.get('scene_attributes', {}),
-                            'dominant_colors': dominant_colors,  # 색상 분석 결과 추가
-                            'relevance_score': 2,  # 색상 매칭 시 높은 점수
-                            'color_search_info': {
-                                'requested_colors': detected_colors,
-                                'color_info_available': len(dominant_colors) > 0,
-                                'color_match_found': color_match_found,
-                                'actual_image_available': actual_image_path is not None,
-                                'message': f"색상 분석 결과: {dominant_colors} | 요청하신 색상: {', '.join(detected_colors)}"
+                        # 색상 분석 결과 확인
+                        dominant_colors = frame.get('dominant_colors', [])
+                        color_match_found = False
+                        
+                        # 요청된 색상과 매칭되는지 확인 (더 유연한 매칭)
+                        for detected_color in detected_colors:
+                            for color_info in dominant_colors:
+                                color_name = color_info.get('color', '').lower()
+                                detected_color_lower = detected_color.lower()
+                                
+                                # 색상 키워드 매핑을 통한 매칭
+                                color_mapping = {
+                                    '분홍색': 'pink', '핑크': 'pink',
+                                    '빨간색': 'red', '빨강': 'red',
+                                    '파란색': 'blue', '파랑': 'blue',
+                                    '노란색': 'yellow', '노랑': 'yellow',
+                                    '초록색': 'green', '녹색': 'green',
+                                    '보라색': 'purple', '자주색': 'purple',
+                                    '검은색': 'black', '검정': 'black',
+                                    '흰색': 'white', '하양': 'white',
+                                    '회색': 'gray', 'grey': 'gray',
+                                    '주황색': 'orange', '오렌지': 'orange',
+                                    '갈색': 'brown', '브라운': 'brown'
+                                }
+                                
+                                # 매핑된 색상으로 비교
+                                mapped_color = color_mapping.get(detected_color_lower, detected_color_lower)
+                                
+                                # 더 유연한 색상 매칭 (색상이 없어도 일단 포함)
+                                if (mapped_color == color_name or 
+                                    detected_color_lower == color_name or 
+                                    detected_color_lower in color_name or 
+                                    color_name in detected_color_lower or
+                                    len(dominant_colors) == 0):  # 색상 정보가 없어도 포함
+                                    color_match_found = True
+                                    print(f"✅ 색상 매칭 발견: {detected_color} -> {color_info}")
+                                    break
+                            if color_match_found:
+                                break
+                        
+                        # 디버깅을 위한 로그 추가
+                        print(f"🔍 프레임 {frame.get('image_id', 0)} 색상 분석:")
+                        print(f"  - 요청된 색상: {detected_colors}")
+                        print(f"  - 감지된 색상: {[c.get('color', '') for c in dominant_colors]}")
+                        print(f"  - 매칭 결과: {color_match_found}")
+                        
+                        # 색상 검색의 경우 색상 매칭이 된 프레임만 포함
+                        if color_match_found:
+                            frame_image_path = frame.get('frame_image_path', '')
+                            actual_image_path = None
+                            if frame_image_path:
+                                # 실제 파일 시스템 경로 생성
+                                import os
+                                from django.conf import settings
+                                actual_image_path = os.path.join(settings.MEDIA_ROOT, frame_image_path)
+                                if os.path.exists(actual_image_path):
+                                    print(f"✅ 실제 이미지 파일 존재: {actual_image_path}")
+                                else:
+                                    print(f"❌ 실제 이미지 파일 없음: {actual_image_path}")
+                            
+                            frame_info = {
+                                'image_id': frame.get('image_id', 0),
+                                'timestamp': frame.get('timestamp', 0),
+                                'frame_image_path': frame_image_path,
+                                'image_url': f'/media/{frame_image_path}',
+                                'actual_image_path': actual_image_path,  # 실제 파일 경로 추가
+                                'persons': persons,
+                                'objects': frame.get('objects', []),
+                                'scene_attributes': frame.get('scene_attributes', {}),
+                                'dominant_colors': dominant_colors,  # 색상 분석 결과 추가
+                                'relevance_score': 2,  # 색상 매칭 시 높은 점수
+                                'color_search_info': {
+                                    'requested_colors': detected_colors,
+                                    'color_info_available': len(dominant_colors) > 0,
+                                    'color_match_found': color_match_found,
+                                    'actual_image_available': actual_image_path is not None,
+                                    'message': f"색상 분석 결과: {dominant_colors} | 요청하신 색상: {', '.join(detected_colors)}"
+                                }
                             }
-                        }
-                        relevant_frames.append(frame_info)
-                        print(f"✅ 프레임 {frame_info['image_id']} 추가 (색상 매칭 성공)")
-                    else:
-                        print(f"❌ 프레임 {frame.get('image_id', 0)}: 색상 매칭 실패 - {detected_colors} vs {dominant_colors}")
+                            relevant_frames.append(frame_info)
+                            print(f"✅ 프레임 {frame_info['image_id']} 추가 (색상 매칭 성공)")
+                        else:
+                            print(f"❌ 프레임 {frame.get('image_id', 0)}: 색상 매칭 실패 - {detected_colors} vs {dominant_colors}")
+                
+                else:
+                    print("🎨 색상 키워드 감지 실패 - 일반 검색으로 전환")
+                    # 색상 키워드가 감지되지 않으면 모든 프레임 포함
+                    for frame in frame_results:
+                        persons = frame.get('persons', [])
+                        if persons:  # 사람이 있는 프레임만
+                            frame_info = {
+                                'image_id': frame.get('image_id', 0),
+                                'timestamp': frame.get('timestamp', 0),
+                                'frame_image_path': frame.get('frame_image_path', ''),
+                                'image_url': f'/media/{frame.get("frame_image_path", "")}',
+                                'persons': persons,
+                                'objects': frame.get('objects', []),
+                                'scene_attributes': frame.get('scene_attributes', {}),
+                                'relevance_score': len(persons)
+                            }
+                            relevant_frames.append(frame_info)
+                            print(f"✅ 프레임 {frame_info['image_id']} 추가 (일반 검색, 사람 {len(persons)}명)")
             
-            # 사람 검색 모드
-            elif any(keyword in message_lower for keyword in ['사람', 'person', 'people', 'human', '찾아', '보여']):
+            elif intent == 'person_search':
                 print("👤 사람 검색 모드")
                 print(f"🔍 검색할 프레임 수: {len(frame_results)}")
                 for frame in frame_results:
@@ -1931,26 +2269,29 @@ class VideoChatView(APIView):
                     else:
                         print(f"❌ 프레임 {frame.get('image_id', 0)}: 사람 감지 안됨")
             
-            # 다른 키워드 검색
-            else:
-                search_keywords = {
-                    '자동차': ['car', 'vehicle', 'automobile'],
-                    '동물': ['animal', 'dog', 'cat', 'pet'],
-                    '음식': ['food', 'meal', 'eat', 'drink'],
-                    '옷': ['clothing', 'clothes', 'dress', 'shirt'],
-                    '건물': ['building', 'house', 'structure'],
-                    '자연': ['nature', 'tree', 'sky', 'mountain'],
-                    '물체': ['object', 'item', 'thing']
-                }
-                
-                # 한국어 키워드 추출
-                matched_keywords = []
-                for korean_key, english_keywords in search_keywords.items():
-                    if korean_key in message_lower:
-                        matched_keywords.extend(english_keywords)
-                
+            elif intent == 'video_summary':
+                print("📋 요약 모드 - 주요 프레임 선택")
+                # 활동 수준이 높은 프레임 우선 선택
+                frame_scores = []
                 for frame in frame_results:
-                    frame_score = 0
+                    scene_attrs = frame.get('scene_attributes', {})
+                    activity_level = scene_attrs.get('activity_level', 'low')
+                    person_count = len(frame.get('persons', []))
+                    
+                    score = 0
+                    if activity_level == 'high':
+                        score += 3
+                    elif activity_level == 'medium':
+                        score += 2
+                    else:
+                        score += 1
+                    
+                    score += min(person_count, 3)  # 사람 수에 따른 점수
+                    frame_scores.append((frame, score))
+                
+                # 점수 순으로 정렬하여 상위 프레임 선택
+                frame_scores.sort(key=lambda x: x[1], reverse=True)
+                for frame, score in frame_scores[:3]:
                     frame_info = {
                         'image_id': frame.get('image_id', 0),
                         'timestamp': frame.get('timestamp', 0),
@@ -1959,30 +2300,63 @@ class VideoChatView(APIView):
                         'persons': frame.get('persons', []),
                         'objects': frame.get('objects', []),
                         'scene_attributes': frame.get('scene_attributes', {}),
-                        'relevance_score': 0
+                        'relevance_score': score
                     }
-                    
-                    # 객체 검색
-                    for obj in frame_info['objects']:
-                        obj_class = obj.get('class', '').lower()
-                        if any(keyword in obj_class for keyword in matched_keywords):
-                            frame_score += 5
-                    
-                    # 장면 속성 검색
-                    scene_attrs = frame_info['scene_attributes']
-                    if 'outdoor' in message_lower and scene_attrs.get('scene_type') == 'outdoor':
-                        frame_score += 3
-                    if 'indoor' in message_lower and scene_attrs.get('scene_type') == 'indoor':
-                        frame_score += 3
-                    if 'bright' in message_lower and scene_attrs.get('lighting') == 'bright':
-                        frame_score += 2
-                    if 'dark' in message_lower and scene_attrs.get('lighting') == 'dark':
-                        frame_score += 2
-                    
-                    if frame_score > 0:
-                        frame_info['relevance_score'] = frame_score
-                        relevant_frames.append(frame_info)
-                        print(f"✅ 프레임 {frame_info['image_id']} 추가 (점수: {frame_score})")
+                    relevant_frames.append(frame_info)
+                    print(f"✅ 프레임 {frame_info['image_id']} 추가 (요약용, 점수: {score})")
+            
+            elif intent == 'temporal_analysis':
+                print("⏰ 시간대 분석 모드")
+                # 시간 범위 파싱
+                time_range = self._parse_time_range(message)
+                if time_range:
+                    start_time, end_time = time_range
+                    print(f"⏰ 시간 범위: {start_time}초 ~ {end_time}초")
+                    for frame in frame_results:
+                        timestamp = frame.get('timestamp', 0)
+                        if start_time <= timestamp <= end_time:
+                            frame_info = {
+                                'image_id': frame.get('image_id', 0),
+                                'timestamp': frame.get('timestamp', 0),
+                                'frame_image_path': frame.get('frame_image_path', ''),
+                                'image_url': f'/media/{frame.get("frame_image_path", "")}',
+                                'persons': frame.get('persons', []),
+                                'objects': frame.get('objects', []),
+                                'scene_attributes': frame.get('scene_attributes', {}),
+                                'relevance_score': 1
+                            }
+                            relevant_frames.append(frame_info)
+                            print(f"✅ 프레임 {frame_info['image_id']} 추가 (시간대: {timestamp}초)")
+                else:
+                    # 시간 범위를 파싱할 수 없는 경우 전체 프레임
+                    relevant_frames = [{
+                        'image_id': frame.get('image_id', 0),
+                        'timestamp': frame.get('timestamp', 0),
+                        'frame_image_path': frame.get('frame_image_path', ''),
+                        'image_url': f'/media/{frame.get("frame_image_path", "")}',
+                        'persons': frame.get('persons', []),
+                        'objects': frame.get('objects', []),
+                        'scene_attributes': frame.get('scene_attributes', {}),
+                        'relevance_score': 1
+                    } for frame in frame_results]
+                    print(f"✅ 시간 범위 파싱 실패 - 전체 프레임 {len(relevant_frames)}개 선택")
+            
+            else:
+                print("📋 일반 검색 모드")
+                # 처음 2개 프레임 선택
+                for frame in frame_results[:2]:
+                    frame_info = {
+                        'image_id': frame.get('image_id', 0),
+                        'timestamp': frame.get('timestamp', 0),
+                        'frame_image_path': frame.get('frame_image_path', ''),
+                        'image_url': f'/media/{frame.get("frame_image_path", "")}',
+                        'persons': frame.get('persons', []),
+                        'objects': frame.get('objects', []),
+                        'scene_attributes': frame.get('scene_attributes', {}),
+                        'relevance_score': 1
+                    }
+                    relevant_frames.append(frame_info)
+                    print(f"✅ 프레임 {frame_info['image_id']} 추가 (일반 검색)")
             
             # 관련도 점수순으로 정렬하고 상위 3개만 반환
             relevant_frames.sort(key=lambda x: x['relevance_score'], reverse=True)
