@@ -53,13 +53,26 @@ Docker 기반 컨테이너 환경에서 안정적으로 실행됩니다.
 ```
 
 AI-OF-AI/
-├── frontend/             # React.js 기반 프론트엔드
-├── backend/              # Django REST Framework API 서버
-├── core_ai/              # LangChain RAG, YOLOv8, BLIP2 등 핵심 AI 모듈
-├── docs/                 # 시스템 정의서, 명세서, 요구사항 문서 등
-│   └── images/           # (프로젝트 이미지 폴더)
-├── docker-compose.yml    # 컨테이너 실행 환경 설정
-└── README.md
+├── backend/                   
+├── backend_videochat/          
+├── chatbot_backend/            
+├── frontend/                   
+├── frontend_videochat/         
+├── __pycache__/              
+├── .DS_Store                  
+├── .gitignore               
+├── LLM_VIDEO_SEARCH_IMPLEMENTATION_COMPLETE.md   
+├── NETWORK_ERROR_SOLUTIONS.md              
+├── NETWORK_ERROR_TROUBLESHOOTING.md          
+├── enhanced_video_search_proposal.md       
+├── chat.py                     
+├── first_views.py               
+├── cam_04.mp4-meta_db.json     
+├── cam_06.mp4-detection_db.json 
+├── package.json                
+├── package-lock.json          
+└── README.md                    
+
 
 ````
 
